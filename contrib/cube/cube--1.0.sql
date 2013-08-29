@@ -125,6 +125,7 @@ RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
+
 -- Misc N-dimensional functions
 
 CREATE FUNCTION cube_subset(cube, int4[])
@@ -143,22 +144,6 @@ CREATE FUNCTION distance_coord(cube, int)
 RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
-
-CREATE FUNCTION distance_taxicab(cube, cube)
-RETURNS float8
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE FUNCTION distance_euclid(cube, cube)
-RETURNS float8
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
-CREATE FUNCTION distance_chebyshev(cube, cube)
-RETURNS float8
-AS 'MODULE_PATHNAME'
-LANGUAGE C IMMUTABLE STRICT;
-
 
 -- Extracting elements functions
 
@@ -272,24 +257,6 @@ CREATE OPERATOR -> (
 	-- RESTRICT = contsel, JOIN = contjoinsel
 );
 
-CREATE OPERATOR <#> (
-	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_taxicab,
-	COMMUTATOR = '<#>'
-	-- RESTRICT = contsel, JOIN = contjoinsel
-);
-
-CREATE OPERATOR <-> (
-	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_euclid,
-	COMMUTATOR = '<->'
-	-- RESTRICT = contsel, JOIN = contjoinsel
-);
-
-CREATE OPERATOR <=> (
-	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_chebyshev,
-	COMMUTATOR = '<=>'
-	-- RESTRICT = contsel, JOIN = contjoinsel
-);
-
 -- these are obsolete/deprecated:
 CREATE OPERATOR @ (
 	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = cube_contains,
@@ -365,10 +332,6 @@ CREATE OPERATOR CLASS gist_cube_ops
 	OPERATOR	13	@ ,
 	OPERATOR	14	~ ,
 	OPERATOR	15	-> (cube, int) FOR ORDER BY float_ops,
-	-- OPERATOR	16	<#> (cube, cube) FOR ORDER BY float_ops,
-	-- OPERATOR	17	<-> (cube, cube) FOR ORDER BY float_ops,
-	-- OPERATOR	18	<=> (cube, cube) FOR ORDER BY float_ops,
-
 	FUNCTION	1	g_cube_consistent (internal, cube, int, oid, internal),
 	FUNCTION	2	g_cube_union (internal, internal),
 	FUNCTION	3	g_cube_compress (internal),

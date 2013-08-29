@@ -126,17 +126,11 @@ PG_FUNCTION_INFO_V1(cube_distance);
 PG_FUNCTION_INFO_V1(cube_is_point);
 PG_FUNCTION_INFO_V1(cube_enlarge);
 PG_FUNCTION_INFO_V1(distance_coord);
-PG_FUNCTION_INFO_V1(distance_taxicab);
-PG_FUNCTION_INFO_V1(distance_euclid);
-PG_FUNCTION_INFO_V1(distance_chebyshev);
 
 Datum		cube_distance(PG_FUNCTION_ARGS);
 Datum		cube_is_point(PG_FUNCTION_ARGS);
 Datum		cube_enlarge(PG_FUNCTION_ARGS);
 Datum		distance_coord(PG_FUNCTION_ARGS);
-Datum		distance_taxicab(PG_FUNCTION_ARGS);
-Datum		distance_euclid(PG_FUNCTION_ARGS);
-Datum		distance_chebyshev(PG_FUNCTION_ARGS);
 
 /*
 ** For internal use only
@@ -1289,12 +1283,7 @@ distance_coord(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *cube = PG_GETARG_NDBOX(0);
 	int			coord = PG_GETARG_INT32(1);
-	double 		distance;
 
-	printf("distance_coord \n");
-
-	distance = 1.0/(cube->x[1]);
-	PG_RETURN_FLOAT8(distance);
 	// if ((-2*cube->dim <= coord) && (coord < 0))
 	// 	PG_RETURN_FLOAT8(1.0/cube->x[-1*coord - 1]);
 	// else if ((0 < coord) && (coord <= 2*cube->dim))
@@ -1303,58 +1292,21 @@ distance_coord(PG_FUNCTION_ARGS)
 	// 	ereport(ERROR,
 	// 				(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
 	// 				 errmsg("Index out of bounds")));
-}
-
-Datum
-distance_taxicab(PG_FUNCTION_ARGS)
-{
-	printf("distance_taxicab \n");
-	return 43.0;
-}
-
-Datum
-distance_euclid(PG_FUNCTION_ARGS)
-{
-	printf("distance_euclid \n");
-	return 43.0;
-}
-
-Datum
-distance_chebyshev(PG_FUNCTION_ARGS)
-{
-	printf("distance_chebyshev \n");
-	return 43.0;
+	
+	PG_RETURN_FLOAT8(1.0/cube->x[coord-1]);
 }
 
 Datum
 g_cube_distance(PG_FUNCTION_ARGS)
 {
 	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	int			coord = PG_GETARG_INT32(1);
 	NDBOX  *cube = DatumGetNDBOX(entry->key);
-    // StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
-    double      retval;
-    int			coord = PG_GETARG_INT32(1);
-    // if (strategy == 15)
-    // {
-    // 	int			coord = PG_GETARG_INT32(1);
-    // 	// retval = ((coord>0) - (coord<0))*cube->x[abs(coord)-1];
-    // 	// if (coord < 0)
-    // 	retval = 1.0/cube->x[coord-1];
-	   //  // else
-	   //  // 	retval = cube->x[coord-1];
+	double      retval;
 
-    // }
-    // else
-    // {
-    // 	// NDBOX  *query_cube = PG_GETARG_NDBOX(1);
-    // 	// retval = 55;
-    // }
-    retval = 1.0/(cube->x[1]);
-
-    // printf("strategy: %i \n", strategy);
-    printf("retval: %f \n", retval);
-
-    PG_RETURN_FLOAT8(retval);
+	// retval = ((coord>0) - (coord<0))*cube->x[abs(coord)-1];
+	// PG_RETURN_FLOAT8(retval);
+	PG_RETURN_FLOAT8(1.0/cube->x[coord-1]);
 }
 
 static double
