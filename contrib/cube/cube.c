@@ -38,8 +38,6 @@ PG_FUNCTION_INFO_V1(cube_in);
 PG_FUNCTION_INFO_V1(cube_a_f8_f8);
 PG_FUNCTION_INFO_V1(cube_a_f8);
 PG_FUNCTION_INFO_V1(cube_out);
-PG_FUNCTION_INFO_V1(cube_f8);
-PG_FUNCTION_INFO_V1(cube_f8_f8);
 PG_FUNCTION_INFO_V1(cube_c_f8);
 PG_FUNCTION_INFO_V1(cube_c_f8_f8);
 PG_FUNCTION_INFO_V1(cube_dim);
@@ -51,8 +49,6 @@ Datum		cube_in(PG_FUNCTION_ARGS);
 Datum		cube_a_f8_f8(PG_FUNCTION_ARGS);
 Datum		cube_a_f8(PG_FUNCTION_ARGS);
 Datum		cube_out(PG_FUNCTION_ARGS);
-Datum		cube_f8(PG_FUNCTION_ARGS);
-Datum		cube_f8_f8(PG_FUNCTION_ARGS);
 Datum		cube_c_f8(PG_FUNCTION_ARGS);
 Datum		cube_c_f8_f8(PG_FUNCTION_ARGS);
 Datum		cube_dim(PG_FUNCTION_ARGS);
@@ -61,9 +57,42 @@ Datum		cube_ur_coord(PG_FUNCTION_ARGS);
 Datum		cube_subset(PG_FUNCTION_ARGS);
 
 /*
+ * Input/Output for typed cubes
+ */
+
+static NDBOX* cube_arr_arr(Datum ur_datum, Datum ll_datum, int type);
+static NDBOX* cube_arr(Datum ur_datum, int type);
+static NDBOX* cube_num(Datum x_datum, int type);
+static NDBOX* cube_num_num(Datum x0_datum, Datum x1_datum, int type);
+
+CUBE_TYPE_WRAPPER1(cube_arr, FLOAT8);
+CUBE_TYPE_WRAPPER1(cube_num, FLOAT8);
+CUBE_TYPE_WRAPPER2(cube_arr_arr, FLOAT8);
+CUBE_TYPE_WRAPPER2(cube_num_num, FLOAT8);
+
+CUBE_TYPE_WRAPPER1(cube_arr, FLOAT4);
+CUBE_TYPE_WRAPPER1(cube_num, FLOAT4);
+CUBE_TYPE_WRAPPER2(cube_arr_arr, FLOAT4);
+CUBE_TYPE_WRAPPER2(cube_num_num, FLOAT4);
+
+CUBE_TYPE_WRAPPER1(cube_arr, INT4);
+CUBE_TYPE_WRAPPER1(cube_num, INT4);
+CUBE_TYPE_WRAPPER2(cube_arr_arr, INT4);
+CUBE_TYPE_WRAPPER2(cube_num_num, INT4);
+
+CUBE_TYPE_WRAPPER1(cube_arr, INT2);
+CUBE_TYPE_WRAPPER1(cube_num, INT2);
+CUBE_TYPE_WRAPPER2(cube_arr_arr, INT2);
+CUBE_TYPE_WRAPPER2(cube_num_num, INT2);
+
+CUBE_TYPE_WRAPPER1(cube_arr, INT1);
+CUBE_TYPE_WRAPPER1(cube_num, INT1);
+CUBE_TYPE_WRAPPER2(cube_arr_arr, INT1);
+CUBE_TYPE_WRAPPER2(cube_num_num, INT1);
+
+/*
 ** GiST support methods
 */
-
 PG_FUNCTION_INFO_V1(g_cube_consistent);
 PG_FUNCTION_INFO_V1(g_cube_compress);
 PG_FUNCTION_INFO_V1(g_cube_decompress);
@@ -102,7 +131,6 @@ Datum		cube_cmp(PG_FUNCTION_ARGS);
 /*
 ** R-tree support functions
 */
-
 PG_FUNCTION_INFO_V1(cube_contains);
 PG_FUNCTION_INFO_V1(cube_contained);
 PG_FUNCTION_INFO_V1(cube_overlap);
@@ -131,6 +159,7 @@ Datum		cube_enlarge(PG_FUNCTION_ARGS);
 /*
 ** For internal use only
 */
+void		check_coord(double num, int type);
 int32		cube_cmp_v0(NDBOX *a, NDBOX *b);
 bool		cube_contains_v0(NDBOX *a, NDBOX *b);
 bool		cube_overlap_v0(NDBOX *a, NDBOX *b);
@@ -145,6 +174,177 @@ bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strate
 */
 static double distance_1D(double a1, double a2, double b1, double b2);
 
+PG_FUNCTION_INFO_V1(cube_type_in);
+Datum		cube_type_in(PG_FUNCTION_ARGS);
+// PG_FUNCTION_INFO_V1(cube_type_out);
+// Datum		cube_type_out(PG_FUNCTION_ARGS);
+
+
+PG_FUNCTION_INFO_V1(cube);
+Datum cube(PG_FUNCTION_ARGS);
+Datum cube(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *arg = PG_GETARG_NDBOX(0);
+	int			len = PG_GETARG_INT32(1);
+	bool		isExplicit = PG_GETARG_BOOL(2);
+
+	// printf("cube: \n");
+	// printf("cube: len= %i\n",len);
+
+
+	PG_RETURN_NDBOX(arg);
+}
+
+Datum
+cube_type_in(PG_FUNCTION_ARGS)
+{
+	ArrayType  *args = PG_GETARG_ARRAYTYPE_P(0);
+	char   *arglist;
+
+	arglist = (char *) ARR_DATA_PTR(args);
+
+	// printf("cube_type_in: \n");
+	// printf("\t%i \n", ARRNELEMS(args));
+	// printf("\t%s \n", arglist);
+
+	PG_RETURN_INT32(13);
+}
+
+
+// Datum
+// cube_type_out(PG_FUNCTION_ARGS)
+// {
+// 	// ArrayType  *args = PG_GETARG_ARRAYTYPE_P(0);
+// 	// char   *arglist;
+
+// 	// arglist = (char *) ARR_DATA_PTR(args);
+
+// 	// printf("%i \n", ARRNELEMS(args));
+// 	// printf("%s \n", arglist);
+
+// 	PG_RETURN_CSTRING("hohoho");
+// 	// return a;
+// }
+
+/*****************************************************************************
+ * Typed cube abstraction layer
+ *****************************************************************************/
+double get_coord(NDBOX *cube, int i)
+{
+	switch (TYPE(cube))
+	{
+		case CUBE_FLOAT4:
+			return cube->coord_f4[i];
+		case CUBE_INT4:
+			return cube->coord_i4[i];
+		case CUBE_INT2:
+			return cube->coord_i2[i];
+		case CUBE_INT1:
+			return cube->coord_i1[i];
+		case CUBE_FLOAT8:
+		default:
+			return cube->coord_f8[i];
+	}
+}
+
+void set_coord(NDBOX *cube, int i, double value)
+{
+	switch (TYPE(cube))
+	{
+		case CUBE_FLOAT4:
+			cube->coord_f4[i] = value;
+			break;
+		case CUBE_INT4:
+			cube->coord_i4[i] = value;
+			break;
+		case CUBE_INT2:
+			cube->coord_i2[i] = value;
+			break;
+		case CUBE_INT1:
+			cube->coord_i1[i] = value;
+			break;
+		case CUBE_FLOAT8:
+		default:
+			cube->coord_f8[i] = value;
+			break;
+	}
+}
+
+NDBOX* init_cube(int dim, int point, int type)
+{
+	NDBOX	   *cube;
+	int			size;
+
+	switch (type)
+	{
+		case CUBE_FLOAT4:
+			size = offsetof(NDBOX, coord_f8[0]) + dim*(!point + 1)*sizeof(float);
+			break;
+		case CUBE_INT4:
+			size = offsetof(NDBOX, coord_f8[0]) + dim*(!point + 1)*sizeof(int);
+			break;
+		case CUBE_INT2:
+			size = offsetof(NDBOX, coord_f8[0]) + dim*(!point + 1)*sizeof(short);
+			break;
+		case CUBE_INT1:
+			size = offsetof(NDBOX, coord_f8[0]) + dim*(!point + 1)*sizeof(char);
+			break;
+		case CUBE_FLOAT8:
+		default:
+			size = offsetof(NDBOX, coord_f8[0]) + dim*(!point + 1)*sizeof(double);
+			break;
+	}
+
+	cube = (NDBOX *) palloc0(size);
+	SET_VARSIZE(cube, size);
+	SET_DIM(cube, dim);
+	SET_TYPE(cube, type);
+	if (point)
+		SET_POINT_BIT(cube);
+
+	return cube;
+}
+
+void cube_to_point(NDBOX *cube)
+{
+	int new_size;
+
+	new_size = offsetof(NDBOX, coord_f8[0]) +
+		(VARSIZE(cube) - offsetof(NDBOX, coord_f8[0]))/2;
+
+	cube = repalloc(cube, new_size);
+	SET_VARSIZE(cube, new_size);
+	SET_POINT_BIT(cube);
+}
+
+void check_coord(double num, int type)
+{
+	switch (type)
+	{
+		case CUBE_INT4:
+			if ((num < INT_MIN) || (num > INT_MAX))
+				ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("Cube coordinate out of requested type range"),
+					 errdetail("Value (%i) out of signed int4 type", (int)num)));
+			break;
+		case CUBE_INT2:
+			if ((num < SHRT_MIN) || (num > SHRT_MAX))
+				ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("Cube coordinate out of requested type range"),
+					 errdetail("Value (%i) out of signed int2 type", (int)num)));
+			break;
+		case CUBE_INT1:
+			if ( (num < SCHAR_MIN) || (num > SCHAR_MAX))
+				ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("Cube coordinate out of requested type range"),
+					 errdetail("Value (%i) out of signed int1 type", (int)num)));
+			break;
+	}
+}
+
 
 /*****************************************************************************
  * Input/Output functions
@@ -158,6 +358,7 @@ cube_in(PG_FUNCTION_ARGS)
 	char	   *str = PG_GETARG_CSTRING(0);
 	NDBOX	   *result;
 
+	// printf("cube_in for %s\n", str);
 	cube_scanner_init(str);
 
 	if (cube_yyparse(&result) != 0)
@@ -168,21 +369,18 @@ cube_in(PG_FUNCTION_ARGS)
 	PG_RETURN_NDBOX(result);
 }
 
-
 /*
 ** Allows the construction of a cube from 2 float[]'s
 */
-Datum
-cube_a_f8_f8(PG_FUNCTION_ARGS)
+static NDBOX*
+cube_arr_arr(Datum ur_datum, Datum ll_datum, int type)
 {
-	ArrayType  *ur = PG_GETARG_ARRAYTYPE_P(0);
-	ArrayType  *ll = PG_GETARG_ARRAYTYPE_P(1);
+	ArrayType  *ur = DatumGetArrayTypeP(ur_datum);
+	ArrayType  *ll = DatumGetArrayTypeP(ll_datum);
 	NDBOX	   *result;
-	int			i;
-	int			dim;
-	int			size;
-	double	   *dur,
-			   *dll;
+	int			i, dim;
+	bool		point = true;
+	double	   *dur, *dll;
 
 	if (array_contains_nulls(ur) || array_contains_nulls(ll))
 		ereport(ERROR,
@@ -197,32 +395,34 @@ cube_a_f8_f8(PG_FUNCTION_ARGS)
 
 	dur = ARRPTR(ur);
 	dll = ARRPTR(ll);
-
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * 2 * dim;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = dim;
+	result = init_cube(dim, 0, type);
 
 	for (i = 0; i < dim; i++)
 	{
-		result->x[i] = dur[i];
-		result->x[i + dim] = dll[i];
+		check_coord(dur[i], type);
+		set_coord(result, i, dur[i]);
+		check_coord(dll[i], type);
+		set_coord(result, i+dim, dll[i]);
+		if (dur[i] != dll[i])
+			point = false;
 	}
 
-	PG_RETURN_NDBOX(result);
+	if (point)
+		cube_to_point(result);
+
+	return result;
 }
+
 
 /*
 ** Allows the construction of a zero-volume cube from a float[]
 */
-Datum
-cube_a_f8(PG_FUNCTION_ARGS)
+static NDBOX*
+cube_arr(Datum ur_datum, int type)
 {
-	ArrayType  *ur = PG_GETARG_ARRAYTYPE_P(0);
+	ArrayType  *ur = DatumGetArrayTypeP(ur_datum);
 	NDBOX	   *result;
-	int			i;
-	int			dim;
-	int			size;
+	int			i, dim;
 	double	   *dur;
 
 	if (array_contains_nulls(ur))
@@ -231,21 +431,56 @@ cube_a_f8(PG_FUNCTION_ARGS)
 				 errmsg("cannot work with arrays containing NULLs")));
 
 	dim = ARRNELEMS(ur);
-
 	dur = ARRPTR(ur);
 
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * 2 * dim;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = dim;
+	result = init_cube(dim, 1, type);
 
-	for (i = 0; i < dim; i++)
-	{
-		result->x[i] = dur[i];
-		result->x[i + dim] = dur[i];
+	for (i = 0; i < dim; i++){
+		check_coord(dur[i], type);
+		set_coord(result, i, dur[i]);
 	}
 
-	PG_RETURN_NDBOX(result);
+	return result;
+}
+
+/* Create a one dimensional box with identical upper and lower coordinates */
+static NDBOX*
+cube_num(Datum x_datum, int type)
+{
+	double		x = DatumGetFloat8(x_datum);
+	NDBOX	   *result;
+
+	result = init_cube(1, 1, type);
+	check_coord(x, type);
+	set_coord(result, 0, x);
+
+	return result;
+}
+
+/* Create a one dimensional box */
+static NDBOX*
+cube_num_num(Datum x0_datum, Datum x1_datum, int type)
+{
+	double		x0 = DatumGetFloat8(x0_datum);
+	double		x1 = DatumGetFloat8(x1_datum);
+	NDBOX		*result;
+
+	if (x0 == x1)
+	{
+		result = init_cube(1, 1, type);
+		check_coord(x0, type);
+		set_coord(result, 0, x0);
+	}
+	else
+	{
+		result = init_cube(1, 0, type);
+		check_coord(x0, type);
+		set_coord(result, 0, x0);
+		check_coord(x1, type);
+		set_coord(result, 1, x1);
+	}
+
+	return result;
 }
 
 Datum
@@ -254,9 +489,7 @@ cube_subset(PG_FUNCTION_ARGS)
 	NDBOX	   *c = PG_GETARG_NDBOX(0);
 	ArrayType  *idx = PG_GETARG_ARRAYTYPE_P(1);
 	NDBOX	   *result;
-	int			size,
-				dim,
-				i;
+	int			dim, i;
 	int		   *dx;
 
 	if (array_contains_nulls(idx))
@@ -267,35 +500,33 @@ cube_subset(PG_FUNCTION_ARGS)
 	dx = (int32 *) ARR_DATA_PTR(idx);
 
 	dim = ARRNELEMS(idx);
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * 2 * dim;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = dim;
+	result = init_cube(dim, IS_POINT(c), TYPE(c));
 
 	for (i = 0; i < dim; i++)
 	{
-		if ((dx[i] <= 0) || (dx[i] > c->dim))
+		if ((dx[i] <= 0) || (dx[i] > DIM(c)))
 		{
 			pfree(result);
 			ereport(ERROR,
 					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
 					 errmsg("Index out of bounds")));
 		}
-		result->x[i] = c->x[dx[i] - 1];
-		result->x[i + dim] = c->x[dx[i] + c->dim - 1];
+		set_coord(result, i, LL_COORD(c, dx[i]-1));
+		if (!IS_POINT(c))
+			set_coord(result, i+dim, UR_COORD(c, dx[i]-1));
 	}
 
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_NDBOX(result);
 }
 
+
 Datum
 cube_out(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *cube = PG_GETARG_NDBOX(0);
 	StringInfoData buf;
-	int			dim = cube->dim;
-	bool		equal = true;
+	int			dim = DIM(cube);
 	int			i;
 	int			ndig;
 
@@ -317,22 +548,39 @@ cube_out(PG_FUNCTION_ARGS)
 	{
 		if (i > 0)
 			appendStringInfo(&buf, ", ");
-		appendStringInfo(&buf, "%.*g", ndig, cube->x[i]);
-		if (cube->x[i] != cube->x[i + dim])
-			equal = false;
+		appendStringInfo(&buf, "%.*g", ndig, LL_COORD(cube,i));
 	}
 	appendStringInfoChar(&buf, ')');
 
-	if (!equal)
+	if (!IS_POINT(cube))
 	{
 		appendStringInfo(&buf, ",(");
 		for (i = 0; i < dim; i++)
 		{
 			if (i > 0)
 				appendStringInfo(&buf, ", ");
-			appendStringInfo(&buf, "%.*g", ndig, cube->x[i + dim]);
+			appendStringInfo(&buf, "%.*g", ndig, UR_COORD(cube, i));
 		}
 		appendStringInfoChar(&buf, ')');
+	}
+
+	/*
+	 * print type unless it is float8
+	 */
+	switch (TYPE(cube))
+	{
+		case CUBE_FLOAT4:
+			appendStringInfo(&buf, ":f4");
+			break;
+		case CUBE_INT4:
+			appendStringInfo(&buf, ":i4");
+			break;
+		case CUBE_INT2:
+			appendStringInfo(&buf, ":i2");
+			break;
+		case CUBE_INT1:
+			appendStringInfo(&buf, ":i1");
+			break;
 	}
 
 	PG_FREE_IF_COPY(cube, 0);
@@ -393,9 +641,6 @@ g_cube_union(PG_FUNCTION_ARGS)
 	NDBOX	   *tmp;
 	int			i;
 
-	/*
-	 * fprintf(stderr, "union\n");
-	 */
 	tmp = DatumGetNDBOX(entryvec->vector[0].key);
 
 	/*
@@ -414,33 +659,35 @@ g_cube_union(PG_FUNCTION_ARGS)
 	PG_RETURN_POINTER(out);
 }
 
+
 /*
 ** GiST Compress and Decompress methods for boxes
 ** do not do anything.
 */
-
 Datum
 g_cube_compress(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+	GISTENTRY			*entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	GISTENTRY			*retval;
+	NDBOX 				*cube = DatumGetNDBOX(PG_DETOAST_DATUM(entry->key));
+
+	retval = palloc(sizeof(GISTENTRY));
+	gistentryinit(*retval, PointerGetDatum(cube),
+					entry->rel, entry->page, entry->offset, FALSE);
+	PG_RETURN_POINTER(retval);
 }
 
 Datum
 g_cube_decompress(PG_FUNCTION_ARGS)
 {
-	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
-	NDBOX	   *key = DatumGetNDBOX(PG_DETOAST_DATUM(entry->key));
+	GISTENTRY		*entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	GISTENTRY		*retval;
+	NDBOX			*cube = DatumGetNDBOX(PG_DETOAST_DATUM(entry->key));
 
-	if (key != DatumGetNDBOX(entry->key))
-	{
-		GISTENTRY  *retval = (GISTENTRY *) palloc(sizeof(GISTENTRY));
-
-		gistentryinit(*retval, PointerGetDatum(key),
-					  entry->rel, entry->page,
-					  entry->offset, FALSE);
-		PG_RETURN_POINTER(retval);
-	}
-	PG_RETURN_POINTER(entry);
+	retval = palloc(sizeof(GISTENTRY));
+	gistentryinit(*retval, PointerGetDatum(cube),
+				entry->rel, entry->page, entry->offset, FALSE);
+	PG_RETURN_POINTER(retval);
 }
 
 
@@ -464,12 +711,8 @@ g_cube_penalty(PG_FUNCTION_ARGS)
 	rt_cube_size(DatumGetNDBOX(origentry->key), &tmp2);
 	*result = (float) (tmp1 - tmp2);
 
-	/*
-	 * fprintf(stderr, "penalty\n"); fprintf(stderr, "\t%g\n", *result);
-	 */
 	PG_RETURN_FLOAT8(*result);
 }
-
 
 
 /*
@@ -506,10 +749,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 	OffsetNumber *left,
 			   *right;
 	OffsetNumber maxoff;
-
-	/*
-	 * fprintf(stderr, "picksplit\n");
-	 */
+	 
 	maxoff = entryvec->n - 2;
 	nbytes = (maxoff + 2) * sizeof(OffsetNumber);
 	v->spl_left = (OffsetNumber *) palloc(nbytes);
@@ -625,6 +865,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 	PG_RETURN_POINTER(v);
 }
 
+
 /*
 ** Equality method
 */
@@ -640,9 +881,6 @@ g_cube_same(PG_FUNCTION_ARGS)
 	else
 		*result = FALSE;
 
-	/*
-	 * fprintf(stderr, "same: %s\n", (*result ? "TRUE" : "FALSE" ));
-	 */
 	PG_RETURN_NDBOX(result);
 }
 
@@ -656,9 +894,6 @@ g_cube_leaf_consistent(NDBOX *key,
 {
 	bool		retval;
 
-	/*
-	 * fprintf(stderr, "leaf_consistent, %d\n", strategy);
-	 */
 	switch (strategy)
 	{
 		case RTOverlapStrategyNumber:
@@ -681,6 +916,7 @@ g_cube_leaf_consistent(NDBOX *key,
 	return (retval);
 }
 
+
 bool
 g_cube_internal_consistent(NDBOX *key,
 						   NDBOX *query,
@@ -688,9 +924,6 @@ g_cube_internal_consistent(NDBOX *key,
 {
 	bool		retval;
 
-	/*
-	 * fprintf(stderr, "internal_consistent, %d\n", strategy);
-	 */
 	switch (strategy)
 	{
 		case RTOverlapStrategyNumber:
@@ -728,56 +961,55 @@ NDBOX *
 cube_union_v0(NDBOX *a, NDBOX *b)
 {
 	int			i;
+	bool		point_result = true;
 	NDBOX	   *result;
 
-	if (a->dim >= b->dim)
-	{
-		result = palloc0(VARSIZE(a));
-		SET_VARSIZE(result, VARSIZE(a));
-		result->dim = a->dim;
-	}
-	else
-	{
-		result = palloc0(VARSIZE(b));
-		SET_VARSIZE(result, VARSIZE(b));
-		result->dim = b->dim;
-	}
+	/* let's try to guess result for same pointers */
+	if (a == b)
+		return a;
 
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
-
 		b = a;
 		a = tmp;
 	}
 
-	/*
-	 * use the potentially smaller of the two boxes (b) to fill in the result,
-	 * padding absent dimensions with zeroes
-	 */
-	for (i = 0; i < b->dim; i++)
+	result = init_cube( DIM(a), 0, Min(TYPE(a), TYPE(b)) );
+
+	 /* compute the union */
+	for (i = 0; i < DIM(b); i++)
 	{
-		result->x[i] = Min(b->x[i], b->x[i + b->dim]);
-		result->x[i + a->dim] = Max(b->x[i], b->x[i + b->dim]);
+		set_coord(result, i, Min(
+			Min(LL_COORD(a,i), UR_COORD(a,i)),
+			Min(LL_COORD(b,i), UR_COORD(b,i))
+		));
+		set_coord(result, i + DIM(a), Max(
+			Max(LL_COORD(a,i), UR_COORD(a,i)), 
+			Max(LL_COORD(b,i), UR_COORD(b,i))
+		));
+		if (LL_COORD(result,i) != UR_COORD(result,i))
+			point_result = false;
 	}
-	for (i = b->dim; i < a->dim; i++)
+	for (i = DIM(b); i < DIM(a); i++)
 	{
-		result->x[i] = 0;
-		result->x[i + a->dim] = 0;
+		set_coord(result, i, Min(0,
+			Min(LL_COORD(a,i), UR_COORD(a,i))
+		));
+		set_coord(result, i + DIM(a), Max(0,
+			Max(LL_COORD(a,i), UR_COORD(a,i))
+		));
+		if (LL_COORD(result,i) != UR_COORD(result,i))
+			point_result = false;
 	}
 
-	/* compute the union */
-	for (i = 0; i < a->dim; i++)
-	{
-		result->x[i] =
-			Min(Min(a->x[i], a->x[i + a->dim]), result->x[i]);
-		result->x[i + a->dim] = Max(Max(a->x[i],
-								   a->x[i + a->dim]), result->x[i + a->dim]);
-	}
+	if (point_result)
+		cube_to_point(result);
 
 	return (result);
 }
+
 
 Datum
 cube_union(PG_FUNCTION_ARGS)
@@ -793,6 +1025,7 @@ cube_union(PG_FUNCTION_ARGS)
 	PG_RETURN_NDBOX(res);
 }
 
+
 /* cube_inter */
 Datum
 cube_inter(PG_FUNCTION_ARGS)
@@ -800,24 +1033,12 @@ cube_inter(PG_FUNCTION_ARGS)
 	NDBOX	   *a = PG_GETARG_NDBOX(0);
 	NDBOX	   *b = PG_GETARG_NDBOX(1);
 	NDBOX	   *result;
-	bool		swapped = false;
+	bool		swapped = false,
+				point_result = true;
 	int			i;
 
-	if (a->dim >= b->dim)
-	{
-		result = palloc0(VARSIZE(a));
-		SET_VARSIZE(result, VARSIZE(a));
-		result->dim = a->dim;
-	}
-	else
-	{
-		result = palloc0(VARSIZE(b));
-		SET_VARSIZE(result, VARSIZE(b));
-		result->dim = b->dim;
-	}
-
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
 
@@ -826,29 +1047,36 @@ cube_inter(PG_FUNCTION_ARGS)
 		swapped = true;
 	}
 
-	/*
-	 * use the potentially	smaller of the two boxes (b) to fill in the
-	 * result, padding absent dimensions with zeroes
-	 */
-	for (i = 0; i < b->dim; i++)
+	result = init_cube( DIM(a), 0, Min(TYPE(a), TYPE(b)) );
+
+	for (i = 0; i < DIM(b); i++)
 	{
-		result->x[i] = Min(b->x[i], b->x[i + b->dim]);
-		result->x[i + a->dim] = Max(b->x[i], b->x[i + b->dim]);
+
+		set_coord(result, i, Max(
+			Min(LL_COORD(a,i), UR_COORD(a,i)),
+			Min(LL_COORD(b,i), UR_COORD(b,i))
+		));
+		set_coord(result, i + DIM(a), Min(
+			Max(LL_COORD(a,i), UR_COORD(a,i)),
+			Max(LL_COORD(b,i), UR_COORD(b,i))
+		));
+		if (LL_COORD(result, i) != UR_COORD(result, i))
+			point_result = false;
 	}
-	for (i = b->dim; i < a->dim; i++)
+	for (i = DIM(b); i < DIM(a); i++)
 	{
-		result->x[i] = 0;
-		result->x[i + a->dim] = 0;
+		set_coord(result, i, Max(0,
+			Min(LL_COORD(a,i), UR_COORD(a,i))
+		));
+		set_coord(result, i + DIM(a), Min(0,
+			Max(LL_COORD(a,i), UR_COORD(a,i))
+		));
+		if (LL_COORD(result, i) != UR_COORD(result, i))
+			point_result = false;
 	}
 
-	/* compute the intersection */
-	for (i = 0; i < a->dim; i++)
-	{
-		result->x[i] =
-			Max(Min(a->x[i], a->x[i + a->dim]), result->x[i]);
-		result->x[i + a->dim] = Min(Max(a->x[i],
-								   a->x[i + a->dim]), result->x[i + a->dim]);
-	}
+	if (point_result)
+		cube_to_point(result);
 
 	if (swapped)
 	{
@@ -867,39 +1095,40 @@ cube_inter(PG_FUNCTION_ARGS)
 	PG_RETURN_NDBOX(result);
 }
 
+
 /* cube_size */
 Datum
 cube_size(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *a = PG_GETARG_NDBOX(0);
 	double		result;
-	int			i,
-				j;
+	int			i;
 
 	result = 1.0;
-	for (i = 0, j = a->dim; i < a->dim; i++, j++)
-		result = result * Abs((a->x[j] - a->x[i]));
+	for (i = 0; i < DIM(a); i++)
+		result = result * Abs((LL_COORD(a,i) - UR_COORD(a,i)));
 
 	PG_FREE_IF_COPY(a, 0);
 	PG_RETURN_FLOAT8(result);
 }
 
+
 void
 rt_cube_size(NDBOX *a, double *size)
 {
-	int			i,
-				j;
+	int i;
 
 	if (a == (NDBOX *) NULL)
 		*size = 0.0;
 	else
 	{
 		*size = 1.0;
-		for (i = 0, j = a->dim; i < a->dim; i++, j++)
-			*size = (*size) * Abs((a->x[j] - a->x[i]));
+		for (i = 0; i < DIM(a); i++)
+			*size = (*size) * Abs(UR_COORD(a,i) - LL_COORD(a,i));
 	}
 	return;
 }
+
 
 /* make up a metric in which one box will be 'lower' than the other
    -- this can be useful for sorting and to determine uniqueness */
@@ -909,43 +1138,43 @@ cube_cmp_v0(NDBOX *a, NDBOX *b)
 	int			i;
 	int			dim;
 
-	dim = Min(a->dim, b->dim);
+	dim = Min(DIM(a), DIM(b));
 
 	/* compare the common dimensions */
 	for (i = 0; i < dim; i++)
 	{
-		if (Min(a->x[i], a->x[a->dim + i]) >
-			Min(b->x[i], b->x[b->dim + i]))
+		if (Min(LL_COORD(a, i), UR_COORD(a, i)) >
+			Min(LL_COORD(b, i), UR_COORD(b, i)))
 			return 1;
-		if (Min(a->x[i], a->x[a->dim + i]) <
-			Min(b->x[i], b->x[b->dim + i]))
+		if (Min(LL_COORD(a, i), UR_COORD(a, i)) <
+			Min(LL_COORD(b, i), UR_COORD(b, i)))
 			return -1;
 	}
 	for (i = 0; i < dim; i++)
 	{
-		if (Max(a->x[i], a->x[a->dim + i]) >
-			Max(b->x[i], b->x[b->dim + i]))
+		if (Max(LL_COORD(a, i), UR_COORD(a, i)) >
+			Max(LL_COORD(b, i), UR_COORD(b, i)))
 			return 1;
-		if (Max(a->x[i], a->x[a->dim + i]) <
-			Max(b->x[i], b->x[b->dim + i]))
+		if (Max(LL_COORD(a, i), UR_COORD(a, i)) <
+			Max(LL_COORD(b, i), UR_COORD(b, i)))
 			return -1;
 	}
 
 	/* compare extra dimensions to zero */
-	if (a->dim > b->dim)
+	if (DIM(a) > DIM(b))
 	{
-		for (i = dim; i < a->dim; i++)
+		for (i = dim; i < DIM(a); i++)
 		{
-			if (Min(a->x[i], a->x[a->dim + i]) > 0)
+			if (Min(LL_COORD(a, i), UR_COORD(a, i)) > 0)
 				return 1;
-			if (Min(a->x[i], a->x[a->dim + i]) < 0)
+			if (Min(LL_COORD(a, i), UR_COORD(a, i)) < 0)
 				return -1;
 		}
-		for (i = dim; i < a->dim; i++)
+		for (i = dim; i < DIM(a); i++)
 		{
-			if (Max(a->x[i], a->x[a->dim + i]) > 0)
+			if (Max(LL_COORD(a, i), UR_COORD(a, i)) > 0)
 				return 1;
-			if (Max(a->x[i], a->x[a->dim + i]) < 0)
+			if (Max(LL_COORD(a, i), UR_COORD(a, i)) < 0)
 				return -1;
 		}
 
@@ -955,20 +1184,20 @@ cube_cmp_v0(NDBOX *a, NDBOX *b)
 		 */
 		return 1;
 	}
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
-		for (i = dim; i < b->dim; i++)
+		for (i = dim; i < DIM(b); i++)
 		{
-			if (Min(b->x[i], b->x[b->dim + i]) > 0)
+			if (Min(LL_COORD(b, i), UR_COORD(b, i)) > 0)
 				return -1;
-			if (Min(b->x[i], b->x[b->dim + i]) < 0)
+			if (Min(LL_COORD(b, i), UR_COORD(b, i)) < 0)
 				return 1;
 		}
-		for (i = dim; i < b->dim; i++)
+		for (i = dim; i < DIM(b); i++)
 		{
-			if (Max(b->x[i], b->x[b->dim + i]) > 0)
+			if (Max(LL_COORD(b, i), UR_COORD(b, i)) > 0)
 				return -1;
-			if (Max(b->x[i], b->x[b->dim + i]) < 0)
+			if (Max(LL_COORD(b, i), UR_COORD(b, i)) < 0)
 				return 1;
 		}
 
@@ -982,6 +1211,7 @@ cube_cmp_v0(NDBOX *a, NDBOX *b)
 	/* They're really equal */
 	return 0;
 }
+
 
 Datum
 cube_cmp(PG_FUNCTION_ARGS)
@@ -1098,35 +1328,36 @@ cube_contains_v0(NDBOX *a, NDBOX *b)
 	if ((a == NULL) || (b == NULL))
 		return (FALSE);
 
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		/*
 		 * the further comparisons will make sense if the excess dimensions of
 		 * (b) were zeroes Since both UL and UR coordinates must be zero, we
 		 * can check them all without worrying about which is which.
 		 */
-		for (i = a->dim; i < b->dim; i++)
+		for (i = DIM(a); i < DIM(b); i++)
 		{
-			if (b->x[i] != 0)
+			if (LL_COORD(b,i) != 0)
 				return (FALSE);
-			if (b->x[i + b->dim] != 0)
+			if (UR_COORD(b, i) != 0)
 				return (FALSE);
 		}
 	}
 
 	/* Can't care less about the excess dimensions of (a), if any */
-	for (i = 0; i < Min(a->dim, b->dim); i++)
+	for (i = 0; i < Min(DIM(a), DIM(b)); i++)
 	{
-		if (Min(a->x[i], a->x[a->dim + i]) >
-			Min(b->x[i], b->x[b->dim + i]))
+		if (Min(LL_COORD(a,i), UR_COORD(a, i)) >
+			Min(LL_COORD(b,i), UR_COORD(b, i)))
 			return (FALSE);
-		if (Max(a->x[i], a->x[a->dim + i]) <
-			Max(b->x[i], b->x[b->dim + i]))
+		if (Max(LL_COORD(a,i), UR_COORD(a, i)) <
+			Max(LL_COORD(b,i), UR_COORD(b, i)))
 			return (FALSE);
 	}
 
 	return (TRUE);
 }
+
 
 Datum
 cube_contains(PG_FUNCTION_ARGS)
@@ -1141,6 +1372,7 @@ cube_contains(PG_FUNCTION_ARGS)
 	PG_FREE_IF_COPY(b, 1);
 	PG_RETURN_BOOL(res);
 }
+
 
 /* Contained */
 /* Box(A) Contained by Box(B) IFF Box(B) Contains Box(A) */
@@ -1158,6 +1390,7 @@ cube_contained(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
+
 /* Overlap */
 /* Box(A) Overlap Box(B) IFF (pt(a)LL < pt(B)UR) && (pt(b)LL < pt(a)UR) */
 bool
@@ -1173,7 +1406,7 @@ cube_overlap_v0(NDBOX *a, NDBOX *b)
 		return (FALSE);
 
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
 
@@ -1182,22 +1415,20 @@ cube_overlap_v0(NDBOX *a, NDBOX *b)
 	}
 
 	/* compare within the dimensions of (b) */
-	for (i = 0; i < b->dim; i++)
+	for (i = 0; i < DIM(b); i++)
 	{
-		if (Min(a->x[i], a->x[a->dim + i]) >
-			Max(b->x[i], b->x[b->dim + i]))
+		if (Min(LL_COORD(a,i), UR_COORD(a,i)) > Max(LL_COORD(b,i), UR_COORD(b,i)))
 			return (FALSE);
-		if (Max(a->x[i], a->x[a->dim + i]) <
-			Min(b->x[i], b->x[b->dim + i]))
+		if (Max(LL_COORD(a,i), UR_COORD(a,i)) < Min(LL_COORD(b,i), UR_COORD(b,i)))
 			return (FALSE);
 	}
 
 	/* compare to zero those dimensions in (a) absent in (b) */
-	for (i = b->dim; i < a->dim; i++)
+	for (i = DIM(b); i < DIM(a); i++)
 	{
-		if (Min(a->x[i], a->x[a->dim + i]) > 0)
+		if (Min(LL_COORD(a,i), UR_COORD(a,i)) > 0)
 			return (FALSE);
-		if (Max(a->x[i], a->x[a->dim + i]) < 0)
+		if (Max(LL_COORD(a,i), UR_COORD(a,i)) < 0)
 			return (FALSE);
 	}
 
@@ -1236,7 +1467,7 @@ cube_distance(PG_FUNCTION_ARGS)
 	int			i;
 
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
 
@@ -1247,16 +1478,16 @@ cube_distance(PG_FUNCTION_ARGS)
 
 	distance = 0.0;
 	/* compute within the dimensions of (b) */
-	for (i = 0; i < b->dim; i++)
+	for (i = 0; i < DIM(b); i++)
 	{
-		d = distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]);
+		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i));
 		distance += d * d;
 	}
 
 	/* compute distance to zero for those dimensions in (a) absent in (b) */
-	for (i = b->dim; i < a->dim; i++)
+	for (i = DIM(b); i < DIM(a); i++)
 	{
-		d = distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0);
+		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0);
 		distance += d * d;
 	}
 
@@ -1274,6 +1505,7 @@ cube_distance(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(sqrt(distance));
 }
 
+
 static double
 distance_1D(double a1, double a2, double b1, double b2)
 {
@@ -1289,34 +1521,29 @@ distance_1D(double a1, double a2, double b1, double b2)
 	return (0.0);
 }
 
+
 /* Test if a box is also a point */
 Datum
 cube_is_point(PG_FUNCTION_ARGS)
 {
-	NDBOX	   *a = PG_GETARG_NDBOX(0);
-	int			i,
-				j;
-
-	for (i = 0, j = a->dim; i < a->dim; i++, j++)
-	{
-		if (a->x[i] != a->x[j])
-			PG_RETURN_BOOL(FALSE);
-	}
-
-	PG_FREE_IF_COPY(a, 0);
-	PG_RETURN_BOOL(TRUE);
+	NDBOX		*cube = PG_GETARG_NDBOX(0);
+	if (IS_POINT(cube))
+		PG_RETURN_BOOL(TRUE);
+	else
+		PG_RETURN_BOOL(FALSE);
 }
+
 
 /* Return dimensions in use in the data structure */
 Datum
 cube_dim(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *c = PG_GETARG_NDBOX(0);
-	int			dim = c->dim;
-
+	int			dim = DIM(c);
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_INT32(dim);
 }
+
 
 /* Return a specific normalized LL coordinate */
 Datum
@@ -1326,14 +1553,15 @@ cube_ll_coord(PG_FUNCTION_ARGS)
 	int			n = PG_GETARG_INT16(1);
 	double		result;
 
-	if (c->dim >= n && n > 0)
-		result = Min(c->x[n - 1], c->x[c->dim + n - 1]);
+	if (DIM(c) >= n && n > 0)
+		result = Min(LL_COORD(c, n-1), UR_COORD(c, n-1));
 	else
 		result = 0;
 
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_FLOAT8(result);
 }
+
 
 /* Return a specific normalized UR coordinate */
 Datum
@@ -1343,14 +1571,15 @@ cube_ur_coord(PG_FUNCTION_ARGS)
 	int			n = PG_GETARG_INT16(1);
 	double		result;
 
-	if (c->dim >= n && n > 0)
-		result = Max(c->x[n - 1], c->x[c->dim + n - 1]);
+	if (DIM(c) >= n && n > 0)
+		result = Max(LL_COORD(c, n-1), UR_COORD(c, n-1));
 	else
 		result = 0;
 
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_FLOAT8(result);
 }
+
 
 /* Increase or decrease box size by a radius in at least n dimensions. */
 Datum
@@ -1360,137 +1589,122 @@ cube_enlarge(PG_FUNCTION_ARGS)
 	double		r = PG_GETARG_FLOAT8(1);
 	int32		n = PG_GETARG_INT32(2);
 	NDBOX	   *result;
-	int			dim = 0;
-	int			size;
-	int			i,
-				j,
-				k;
+	int			i, j,
+				dim = 0,
+				shrunk_coordinates = 0;
 
 	if (n > CUBE_MAX_DIM)
 		n = CUBE_MAX_DIM;
 	if (r > 0 && n > 0)
 		dim = n;
-	if (a->dim > dim)
-		dim = a->dim;
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * dim * 2;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = dim;
-	for (i = 0, j = dim, k = a->dim; i < a->dim; i++, j++, k++)
+	if (DIM(a) > dim)
+		dim = DIM(a);
+
+	result = init_cube( dim, 0, TYPE(a) );
+	
+	for (i = 0, j = dim; i < DIM(a); i++, j++)
 	{
-		if (a->x[i] >= a->x[k])
+		if (LL_COORD(a,i) >= UR_COORD(a,i))
 		{
-			result->x[i] = a->x[k] - r;
-			result->x[j] = a->x[i] + r;
+			set_coord(result, i, UR_COORD(a,i) - r);
+			set_coord(result, j, LL_COORD(a,i) + r);
 		}
 		else
 		{
-			result->x[i] = a->x[i] - r;
-			result->x[j] = a->x[k] + r;
+			set_coord(result, i, LL_COORD(a,i) - r);
+			set_coord(result, j, UR_COORD(a,i) + r);
 		}
-		if (result->x[i] > result->x[j])
+		if (LL_COORD(result, i) > LL_COORD(result, j))
 		{
-			result->x[i] = (result->x[i] + result->x[j]) / 2;
-			result->x[j] = result->x[i];
+			set_coord(result, i,
+				(LL_COORD(result, i) + LL_COORD(result, j)) / 2);
+			set_coord(result, j, LL_COORD(result, i));
+			shrunk_coordinates++;
 		}
+		else if (LL_COORD(result, i)  == LL_COORD(result, j))
+			shrunk_coordinates++;
 	}
 	/* dim > a->dim only if r > 0 */
 	for (; i < dim; i++, j++)
 	{
-		result->x[i] = -r;
-		result->x[j] = r;
+		set_coord(result, i, -r);
+		set_coord(result, j, r);
 	}
+
+	/* Point can arise in two cases:
+	   1) When argument is point and r == 0
+	   2) When all coordinates was set to their averages */
+	if ( (IS_POINT(a) && r == 0) || (shrunk_coordinates == dim) )
+		cube_to_point(result);
 
 	PG_FREE_IF_COPY(a, 0);
 	PG_RETURN_NDBOX(result);
 }
 
-/* Create a one dimensional box with identical upper and lower coordinates */
-Datum
-cube_f8(PG_FUNCTION_ARGS)
-{
-	double		x = PG_GETARG_FLOAT8(0);
-	NDBOX	   *result;
-	int			size;
-
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * 2;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = 1;
-	result->x[0] = result->x[1] = x;
-
-	PG_RETURN_NDBOX(result);
-}
-
-/* Create a one dimensional box */
-Datum
-cube_f8_f8(PG_FUNCTION_ARGS)
-{
-	double		x0 = PG_GETARG_FLOAT8(0);
-	double		x1 = PG_GETARG_FLOAT8(1);
-	NDBOX	   *result;
-	int			size;
-
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * 2;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = 1;
-	result->x[0] = x0;
-	result->x[1] = x1;
-
-	PG_RETURN_NDBOX(result);
-}
 
 /* Add a dimension to an existing cube with the same values for the new
    coordinate */
 Datum
 cube_c_f8(PG_FUNCTION_ARGS)
 {
-	NDBOX	   *c = PG_GETARG_NDBOX(0);
+	NDBOX		*cube = PG_GETARG_NDBOX(0);
 	double		x = PG_GETARG_FLOAT8(1);
-	NDBOX	   *result;
-	int			size;
+	NDBOX		*result;
 	int			i;
 
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * (c->dim + 1) *2;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = c->dim + 1;
-	for (i = 0; i < c->dim; i++)
+	if (IS_POINT(cube))
 	{
-		result->x[i] = c->x[i];
-		result->x[result->dim + i] = c->x[c->dim + i];
+		result = init_cube( DIM(cube) + 1, 1, TYPE(cube) );
+		for (i = 0; i < DIM(cube); i++)
+			set_coord(result, i, LL_COORD(cube, i));
+		set_coord(result, DIM(result) - 1, x);
 	}
-	result->x[result->dim - 1] = x;
-	result->x[2 * result->dim - 1] = x;
+	else
+	{
+		result = init_cube( DIM(cube) + 1, 0, TYPE(cube) );
+		for (i = 0; i < DIM(cube); i++)
+		{
+			set_coord(result, i, LL_COORD(cube, i));
+			set_coord(result, DIM(result) + i, UR_COORD(cube, i));
+		}
+		set_coord(result, DIM(result) - 1, x);
+		set_coord(result, 2*DIM(result) - 1, x);
+	}
 
-	PG_FREE_IF_COPY(c, 0);
+	PG_FREE_IF_COPY(cube, 0);
 	PG_RETURN_NDBOX(result);
 }
+
 
 /* Add a dimension to an existing cube */
 Datum
 cube_c_f8_f8(PG_FUNCTION_ARGS)
 {
-	NDBOX	   *c = PG_GETARG_NDBOX(0);
+	NDBOX	   *cube = PG_GETARG_NDBOX(0);
 	double		x1 = PG_GETARG_FLOAT8(1);
 	double		x2 = PG_GETARG_FLOAT8(2);
 	NDBOX	   *result;
-	int			size;
 	int			i;
 
-	size = offsetof(NDBOX, x[0]) +sizeof(double) * (c->dim + 1) *2;
-	result = (NDBOX *) palloc0(size);
-	SET_VARSIZE(result, size);
-	result->dim = c->dim + 1;
-	for (i = 0; i < c->dim; i++)
-	{
-		result->x[i] = c->x[i];
-		result->x[result->dim + i] = c->x[c->dim + i];
+	if (IS_POINT(cube) && (x1 == x2)){
+		result = init_cube( DIM(cube) + 1, 1, TYPE(cube) );
+		for (i = 0; i < DIM(cube); i++)
+			set_coord(result, i, LL_COORD(cube, i));
+		set_coord(result, DIM(result) - 1, x1);
 	}
-	result->x[result->dim - 1] = x1;
-	result->x[2 * result->dim - 1] = x2;
+	else
+	{
+		result = init_cube( DIM(cube) + 1, 0, TYPE(cube) );
+		for (i = 0; i < DIM(cube); i++)
+		{
+			set_coord(result, i, LL_COORD(cube, i));
+			set_coord(result, DIM(result) + i, UR_COORD(cube, i));
+		}
+		set_coord(result, DIM(result) - 1, x1);
+		set_coord(result, 2*DIM(result) - 1, x2);
+	}
 
-	PG_FREE_IF_COPY(c, 0);
+	PG_FREE_IF_COPY(cube, 0);
 	PG_RETURN_NDBOX(result);
 }
+
