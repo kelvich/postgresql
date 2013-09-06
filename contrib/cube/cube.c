@@ -45,6 +45,7 @@ PG_FUNCTION_INFO_V1(cube_c_f8_f8);
 PG_FUNCTION_INFO_V1(cube_dim);
 PG_FUNCTION_INFO_V1(cube_ll_coord);
 PG_FUNCTION_INFO_V1(cube_ur_coord);
+PG_FUNCTION_INFO_V1(cube_coord);
 PG_FUNCTION_INFO_V1(cube_subset);
 
 Datum		cube_in(PG_FUNCTION_ARGS);
@@ -58,6 +59,7 @@ Datum		cube_c_f8_f8(PG_FUNCTION_ARGS);
 Datum		cube_dim(PG_FUNCTION_ARGS);
 Datum		cube_ll_coord(PG_FUNCTION_ARGS);
 Datum		cube_ur_coord(PG_FUNCTION_ARGS);
+Datum		cube_coord(PG_FUNCTION_ARGS);
 Datum		cube_subset(PG_FUNCTION_ARGS);
 
 /*
@@ -122,15 +124,17 @@ Datum		cube_size(PG_FUNCTION_ARGS);
 /*
 ** miscellaneous
 */
-PG_FUNCTION_INFO_V1(cube_distance);
+PG_FUNCTION_INFO_V1(distance_taxicab);
+PG_FUNCTION_INFO_V1(distance_euclid);
+PG_FUNCTION_INFO_V1(distance_chebyshev);
 PG_FUNCTION_INFO_V1(cube_is_point);
 PG_FUNCTION_INFO_V1(cube_enlarge);
-PG_FUNCTION_INFO_V1(distance_coord);
 
-Datum		cube_distance(PG_FUNCTION_ARGS);
+Datum		distance_taxicab(PG_FUNCTION_ARGS);
+Datum		distance_euclid(PG_FUNCTION_ARGS);
+Datum		distance_chebyshev(PG_FUNCTION_ARGS);
 Datum		cube_is_point(PG_FUNCTION_ARGS);
 Datum		cube_enlarge(PG_FUNCTION_ARGS);
-Datum		distance_coord(PG_FUNCTION_ARGS);
 
 /*
 ** For internal use only
@@ -1223,92 +1227,6 @@ cube_overlap(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
-
-/* Distance */
-/* The distance is computed as a per axis sum of the squared distances
-   between 1D projections of the boxes onto Cartesian axes. Assuming zero
-   distance between overlapping projections, this metric coincides with the
-   "common sense" geometric distance */
-Datum
-cube_distance(PG_FUNCTION_ARGS)
-{
-	NDBOX	   *a = PG_GETARG_NDBOX(0),
-			   *b = PG_GETARG_NDBOX(1);
-	bool		swapped = false;
-	double		d,
-				distance;
-	int			i;
-
-	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
-	{
-		NDBOX	   *tmp = b;
-
-		b = a;
-		a = tmp;
-		swapped = true;
-	}
-
-	distance = 0.0;
-	/* compute within the dimensions of (b) */
-	for (i = 0; i < b->dim; i++)
-	{
-		d = distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]);
-		distance += d * d;
-	}
-
-	/* compute distance to zero for those dimensions in (a) absent in (b) */
-	for (i = b->dim; i < a->dim; i++)
-	{
-		d = distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0);
-		distance += d * d;
-	}
-
-	if (swapped)
-	{
-		PG_FREE_IF_COPY(b, 0);
-		PG_FREE_IF_COPY(a, 1);
-	}
-	else
-	{
-		PG_FREE_IF_COPY(a, 0);
-		PG_FREE_IF_COPY(b, 1);
-	}
-
-	PG_RETURN_FLOAT8(sqrt(distance));
-}
-
-Datum
-distance_coord(PG_FUNCTION_ARGS)
-{
-	NDBOX	   *cube = PG_GETARG_NDBOX(0);
-	int			coord = PG_GETARG_INT32(1);
-
-	// if ((-2*cube->dim <= coord) && (coord < 0))
-	// 	PG_RETURN_FLOAT8(1.0/cube->x[-1*coord - 1]);
-	// else if ((0 < coord) && (coord <= 2*cube->dim))
-	// 	PG_RETURN_FLOAT8(cube->x[coord - 1]);
-	// else
-	// 	ereport(ERROR,
-	// 				(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
-	// 				 errmsg("Index out of bounds")));
-	
-	PG_RETURN_FLOAT8(1.0/cube->x[coord-1]);
-}
-
-Datum
-g_cube_distance(PG_FUNCTION_ARGS)
-{
-	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
-	int			coord = PG_GETARG_INT32(1);
-	NDBOX  *cube = DatumGetNDBOX(entry->key);
-	double      retval;
-
-	// retval = ((coord>0) - (coord<0))*cube->x[abs(coord)-1];
-	// PG_RETURN_FLOAT8(retval);
-	PG_RETURN_FLOAT8(1.0/cube->x[coord-1]);
-}
-
 static double
 distance_1D(double a1, double a2, double b1, double b2)
 {
@@ -1322,6 +1240,191 @@ distance_1D(double a1, double a2, double b1, double b2)
 
 	/* the rest are all sorts of intersections */
 	return (0.0);
+}
+
+Datum
+distance_taxicab(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		distance;
+	int			i;
+
+	/* swap the box pointers if needed */
+	if (a->dim < b->dim)
+	{
+		NDBOX	   *tmp = b;
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < b->dim; i++)
+		distance += abs(distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]));
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = b->dim; i < a->dim; i++)
+		distance += abs(distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0));
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+/* Distance */
+/* The distance is computed as a per axis sum of the squared distances
+   between 1D projections of the boxes onto Cartesian axes. Assuming zero
+   distance between overlapping projections, this metric coincides with the
+   "common sense" geometric distance */
+Datum
+distance_euclid(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		d,
+				distance;
+	int			i;
+
+	/* swap the box pointers if needed */
+	if (a->dim < b->dim)
+	{
+		NDBOX	   *tmp = b;
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < b->dim; i++)
+	{
+		d = distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]);
+		distance += d*d;
+	}
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = b->dim; i < a->dim; i++)
+	{
+		d = distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0);
+		distance += d*d;
+	}
+
+	distance = sqrt(distance);
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+/* Distance */
+/* The distance is computed as a per axis sum of the squared distances
+   between 1D projections of the boxes onto Cartesian axes. Assuming zero
+   distance between overlapping projections, this metric coincides with the
+   "common sense" geometric distance */
+Datum
+distance_chebyshev(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		d, distance;
+	int			i;
+
+	/* swap the box pointers if needed */
+	if (a->dim < b->dim)
+	{
+		NDBOX	   *tmp = b;
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < b->dim; i++)
+	{
+		d = abs(distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]));
+		if (d > distance)
+			distance = d;
+	}
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = b->dim; i < a->dim; i++)
+	{
+		d = abs(distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0));
+		if (d > distance)
+			distance = d;
+	}
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+Datum
+g_cube_distance(PG_FUNCTION_ARGS)
+{
+	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
+	NDBOX      *cube = DatumGetNDBOX(entry->key);
+	double      retval;
+
+	if (strategy == 15)
+	{
+		int coord = PG_GETARG_INT32(1);
+		if(coord > 0)
+			retval =  cube->x[coord-1];
+		else
+			retval = -cube->x[-1*coord-1 + cube->dim];
+	}
+	else
+	{
+		NDBOX *query = PG_GETARG_NDBOX(1);
+		switch(strategy)
+		{
+		case 16:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab, PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		case 17:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid, PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		case 18:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_chebyshev, PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		}
+	}
+	PG_RETURN_FLOAT8(retval);
 }
 
 /* Test if a box is also a point */
@@ -1385,6 +1488,22 @@ cube_ur_coord(PG_FUNCTION_ARGS)
 
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_FLOAT8(result);
+}
+
+Datum
+cube_coord(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *cube = PG_GETARG_NDBOX(0);
+	int			coord = PG_GETARG_INT16(1);
+
+	if ((-2*cube->dim <= coord) && (coord < 0))
+		PG_RETURN_FLOAT8(-1*cube->x[-1*coord - 1]);
+	else if ((0 < coord) && (coord <= 2*cube->dim))
+		PG_RETURN_FLOAT8(cube->x[coord - 1]);
+	else
+		ereport(ERROR,
+					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
+					 errmsg("Index out of bounds")));
 }
 
 /* Increase or decrease box size by a radius in at least n dimensions. */

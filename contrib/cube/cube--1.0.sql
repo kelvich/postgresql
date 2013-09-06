@@ -135,12 +135,17 @@ LANGUAGE C IMMUTABLE STRICT;
 
 -- proximity routines
 
-CREATE FUNCTION cube_distance(cube, cube)
+CREATE FUNCTION distance_taxicab(cube, cube)
 RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
-CREATE FUNCTION distance_coord(cube, int)
+CREATE FUNCTION distance_euclid(cube, cube)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION distance_chebyshev(cube, cube)
 RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
@@ -158,6 +163,11 @@ AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
 CREATE FUNCTION cube_ur_coord(cube, int4)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
+CREATE FUNCTION cube_coord(cube, int4)
 RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
@@ -252,9 +262,22 @@ CREATE OPERATOR <@ (
 );
 
 CREATE OPERATOR -> (
-	LEFTARG = cube, RIGHTARG = int, PROCEDURE = distance_coord,
-	COMMUTATOR = '->'
-	-- RESTRICT = contsel, JOIN = contjoinsel
+	LEFTARG = cube, RIGHTARG = int, PROCEDURE = cube_coord
+);
+
+CREATE OPERATOR <#> (
+	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_taxicab,
+	COMMUTATOR = '<#>'
+);
+
+CREATE OPERATOR <-> (
+	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_euclid,
+	COMMUTATOR = '<->'
+);
+
+CREATE OPERATOR <=> (
+	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_chebyshev,
+	COMMUTATOR = '<=>'
 );
 
 -- these are obsolete/deprecated:
@@ -332,6 +355,10 @@ CREATE OPERATOR CLASS gist_cube_ops
 	OPERATOR	13	@ ,
 	OPERATOR	14	~ ,
 	OPERATOR	15	-> (cube, int) FOR ORDER BY float_ops,
+	OPERATOR	16	<#> (cube, cube) FOR ORDER BY float_ops,
+	OPERATOR	17	<-> (cube, cube) FOR ORDER BY float_ops,
+	OPERATOR	18	<=> (cube, cube) FOR ORDER BY float_ops,
+
 	FUNCTION	1	g_cube_consistent (internal, cube, int, oid, internal),
 	FUNCTION	2	g_cube_union (internal, internal),
 	FUNCTION	3	g_cube_compress (internal),
