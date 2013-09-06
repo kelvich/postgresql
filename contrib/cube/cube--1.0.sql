@@ -173,6 +173,10 @@ CREATE FUNCTION cube(cube, float8, float8) RETURNS cube
 AS 'MODULE_PATHNAME', 'cube_c_f8_f8'
 LANGUAGE C IMMUTABLE STRICT;
 
+CREATE FUNCTION cube_sort_by(cube, int4) RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
 -- Test if cube is also a point
 
 CREATE FUNCTION cube_is_point(cube)
@@ -246,6 +250,11 @@ CREATE OPERATOR <@ (
 	RESTRICT = contsel, JOIN = contjoinsel
 );
 
+CREATE OPERATOR <*> (
+	LEFTARG = cube, RIGHTARG = int4, PROCEDURE = cube_sort_by,
+	COMMUTATOR = '<*>'
+);
+
 -- these are obsolete/deprecated:
 CREATE OPERATOR @ (
 	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = cube_contains,
@@ -296,6 +305,11 @@ RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
+CREATE FUNCTION g_cube_distance(internal, cube, smallint, oid)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+
 
 -- Create the operator classes for indexing
 
@@ -316,10 +330,12 @@ CREATE OPERATOR CLASS gist_cube_ops
 	OPERATOR	8	<@ ,
 	OPERATOR	13	@ ,
 	OPERATOR	14	~ ,
+	OPERATOR	15	<*> (cube, int) FOR ORDER BY float_ops,
 	FUNCTION	1	g_cube_consistent (internal, cube, int, oid, internal),
 	FUNCTION	2	g_cube_union (internal, internal),
 	FUNCTION	3	g_cube_compress (internal),
 	FUNCTION	4	g_cube_decompress (internal),
 	FUNCTION	5	g_cube_penalty (internal, internal, internal),
 	FUNCTION	6	g_cube_picksplit (internal, internal),
-	FUNCTION	7	g_cube_same (cube, cube, internal);
+	FUNCTION	7	g_cube_same (cube, cube, internal),
+	FUNCTION	8	g_cube_distance (internal, cube, smallint, oid);
