@@ -641,8 +641,8 @@ g_cube_same(PG_FUNCTION_ARGS)
 		*result = FALSE;
 
 	/*
-	* fprintf(stderr, "same: %s\n", (*result ? "TRUE" : "FALSE" ));
-	*/
+	 * fprintf(stderr, "same: %s\n", (*result ? "TRUE" : "FALSE" ));
+	 */
 	PG_RETURN_NDBOX(result);
 }
 
@@ -657,8 +657,8 @@ g_cube_leaf_consistent(NDBOX *key,
 	bool		retval;
 
 	/*
-	* fprintf(stderr, "leaf_consistent, %d\n", strategy);
-	*/
+	 * fprintf(stderr, "leaf_consistent, %d\n", strategy);
+	 */
 	switch (strategy)
 	{
 		case RTOverlapStrategyNumber:
@@ -689,8 +689,8 @@ g_cube_internal_consistent(NDBOX *key,
 	bool		retval;
 
 	/*
-	* fprintf(stderr, "internal_consistent, %d\n", strategy);
-	*/
+	 * fprintf(stderr, "internal_consistent, %d\n", strategy);
+	 */
 	switch (strategy)
 	{
 		case RTOverlapStrategyNumber:
