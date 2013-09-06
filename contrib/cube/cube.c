@@ -1399,9 +1399,11 @@ cube_enlarge(PG_FUNCTION_ARGS)
 		result->x[j] = r;
 	}
 
-	/* Point can arise in two cases:
-	   1) When argument is point and r == 0
-	   2) When all coordinates was set to their averages */
+	/* 
+	 * Point can arise in two cases:
+	 *  1) When argument is point and r == 0
+	 *  2) When all coordinates was set to their averages
+	 */
 	if ( (IS_POINT(a) && r == 0) || (shrunk_coordinates == dim) ){
 		size = POINT_SIZE(dim);
 		result = (NDBOX *) repalloc(result, size);
