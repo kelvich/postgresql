@@ -69,7 +69,7 @@ PG_FUNCTION_INFO_V1(g_cube_compress);
 PG_FUNCTION_INFO_V1(g_cube_decompress);
 PG_FUNCTION_INFO_V1(g_cube_penalty);
 PG_FUNCTION_INFO_V1(g_cube_picksplit);
-PG_FUNCTION_INFO_V1(g_cube_picksplit_old);
+PG_FUNCTION_INFO_V1(g_cube_picksplit_new);
 PG_FUNCTION_INFO_V1(g_cube_union);
 PG_FUNCTION_INFO_V1(g_cube_same);
 
@@ -78,7 +78,7 @@ Datum		g_cube_compress(PG_FUNCTION_ARGS);
 Datum		g_cube_decompress(PG_FUNCTION_ARGS);
 Datum		g_cube_penalty(PG_FUNCTION_ARGS);
 Datum		g_cube_picksplit(PG_FUNCTION_ARGS);
-Datum		g_cube_picksplit_old(PG_FUNCTION_ARGS);
+Datum		g_cube_picksplit_new(PG_FUNCTION_ARGS);
 Datum		g_cube_union(PG_FUNCTION_ARGS);
 Datum		g_cube_same(PG_FUNCTION_ARGS);
 
@@ -133,20 +133,21 @@ Datum		cube_enlarge(PG_FUNCTION_ARGS);
 /*
 ** For internal use only
 */
-int32		cube_cmp_v0(NDBOX *a, NDBOX *b);
-bool		cube_contains_v0(NDBOX *a, NDBOX *b);
-bool		cube_overlap_v0(NDBOX *a, NDBOX *b);
-NDBOX	   *cube_union_v0(NDBOX *a, NDBOX *b);
-void		rt_cube_size(NDBOX *a, double *sz);
-NDBOX	   *g_cube_binary_union(NDBOX *r1, NDBOX *r2, int *sizep);
-bool		g_cube_leaf_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
-bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
+static inline int32		cube_cmp_v0(NDBOX *a, NDBOX *b);
+static inline bool		cube_contains_v0(NDBOX *a, NDBOX *b);
+static inline bool		cube_overlap_v0(NDBOX *a, NDBOX *b);
+static inline NDBOX	   *cube_union_v0(NDBOX *a, NDBOX *b);
+static inline NDBOX	   *_cube_inter(NDBOX *a, NDBOX *b);
+static inline void		rt_cube_size(NDBOX *a, double *sz);
+static inline NDBOX	   *g_cube_binary_union(NDBOX *r1, NDBOX *r2, int *sizep);
+static inline bool		g_cube_leaf_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
+static inline bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
 
 /*
 ** Auxiliary funxtions
 */
-static double distance_1D(double a1, double a2, double b1, double b2);
-
+static inline double	distance_1D(double a1, double a2, double b1, double b2);
+static inline void		adjustBox(NDBOX *b, NDBOX *addon);
 
 /*****************************************************************************
  * Input/Output functions
@@ -472,13 +473,22 @@ g_cube_penalty(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(*result);
 }
 
-void printbox(NDBOX *cube);
-void
-printbox(NDBOX *cube)
+static inline double
+_cube_size(NDBOX *a)
 {
-	printf("(%.0f, %.0f, %.0f), (%.0f, %.0f, %.0f)\n",
-			cube->x[0], cube->x[1], cube->x[2], 
-			cube->x[3], cube->x[4], cube->x[5]);
+	int			i,
+				j;
+	double		volume;
+
+	if (a == (NDBOX *) NULL)
+		return 0.0;
+	else
+	{
+		volume = 1.0;
+		for (i = 0, j = a->dim; i < a->dim; i++, j++)
+			volume = volume * Abs((a->x[j] - a->x[i]));
+	}
+	return volume;
 }
 
 /*
@@ -486,72 +496,70 @@ printbox(NDBOX *cube)
 ** We use Guttman's poly time split algorithm
 */
 Datum
-g_cube_picksplit_old(PG_FUNCTION_ARGS)
+g_cube_picksplit(PG_FUNCTION_ARGS)
 {
-	GistEntryVector *entryvec = (GistEntryVector *) PG_GETARG_POINTER(0);
-	GIST_SPLITVEC *v = (GIST_SPLITVEC *) PG_GETARG_POINTER(1);
-	OffsetNumber i,
-				j;
-	NDBOX	   *datum_alpha,
-			   *datum_beta;
-	NDBOX	   *datum_l,
-			   *datum_r;
-	NDBOX	   *union_d,
-			   *union_dl,
-			   *union_dr;
-	NDBOX	   *inter_d;
-	bool		firsttime;
-	double		size_alpha,
-				size_beta,
-				size_union,
-				size_inter;
-	double		size_waste,
-				waste;
-	double		size_l,
-				size_r;
-	int			nbytes;
-	OffsetNumber seed_1 = 1,
-				seed_2 = 2;
-	OffsetNumber *left,
-			   *right;
-	OffsetNumber maxoff;
+	GistEntryVector	*entryvec = (GistEntryVector *) PG_GETARG_POINTER(0);
+	GIST_SPLITVEC	*v = (GIST_SPLITVEC *) PG_GETARG_POINTER(1);
+	OffsetNumber	i,
+					j,
+					nelems,
+					seed_1,
+					seed_2,
+					selected_offset;
+	NDBOX		   *cube_alpha,
+				   *cube_beta,
+				   *union_cube,
+				   *inter_cube,
+				   *cube_left,
+				   *cube_right,
+				   *current_cube,
+				   *left_union,
+				   *right_union,
+				   *selected_cube;
+	double			size_waste,
+					waste,
+					volume_left,
+					volume_right,
+					current_increase_l,
+					current_increase_r,
+					current_diff_increase,
+					diff_increase,
+					increase_l,
+					increase_r;
+	int				nbytes,
+					min_count,
+					remaining_count;
+	bool			firsttime,
+				   *inserted_cubes;
 
-	maxoff = entryvec->n - 2;
-	nbytes = (maxoff + 2) * sizeof(OffsetNumber);
+	nelems = entryvec->n - 1;
+	nbytes = nelems*sizeof(OffsetNumber);
 	v->spl_left = (OffsetNumber *) palloc(nbytes);
 	v->spl_right = (OffsetNumber *) palloc(nbytes);
+	inserted_cubes = palloc0(nelems);
+	v->spl_nleft = v->spl_nright = 0;
 
+	/* 
+	 * pick two seed elements
+	 */
 	firsttime = true;
 	waste = 0.0;
-
-	// printf("picksplit:\n");
-	// printf("  entryvec: %i\n", entryvec->n);
-	// printf("  FirstOffsetNumber: %i\n", FirstOffsetNumber);
-	// for (i = FirstOffsetNumber; i < entryvec->n; i = OffsetNumberNext(i)){
-	// 	printf("  entryvec vec%i:", i);
-	// 	printbox(DatumGetNDBOX(entryvec->vector[i].key));
-	// }
-
-	for (i = FirstOffsetNumber; i < maxoff; i = OffsetNumberNext(i))
+	for (i = FirstOffsetNumber; i <= nelems; i = OffsetNumberNext(i))
 	{
-		datum_alpha = DatumGetNDBOX(entryvec->vector[i].key);
-		for (j = OffsetNumberNext(i); j <= maxoff; j = OffsetNumberNext(j))
+		cube_alpha = DatumGetNDBOX(entryvec->vector[i].key);
+		for (j = OffsetNumberNext(i); j <= nelems; j = OffsetNumberNext(j))
 		{
-			datum_beta = DatumGetNDBOX(entryvec->vector[j].key);
+			cube_beta = DatumGetNDBOX(entryvec->vector[j].key);
 
 			/* compute the wasted space by unioning these guys */
 			/* size_waste = size_union - size_inter; */
-			union_d = cube_union_v0(datum_alpha, datum_beta);
-			rt_cube_size(union_d, &size_union);
-			inter_d = DatumGetNDBOX(DirectFunctionCall2(cube_inter,
-						  entryvec->vector[i].key, entryvec->vector[j].key));
-			rt_cube_size(inter_d, &size_inter);
-			size_waste = size_union - size_inter;
+			union_cube = cube_union_v0(cube_alpha, cube_beta);
+			inter_cube = _cube_inter(cube_alpha, cube_beta);
+			size_waste = _cube_size(union_cube) - _cube_size(inter_cube);
 
 			/*
 			 * are these a more promising split than what we've already seen?
 			 */
-
 			if (size_waste > waste || firsttime)
 			{
 				waste = size_waste;
@@ -562,86 +570,102 @@ g_cube_picksplit_old(PG_FUNCTION_ARGS)
 		}
 	}
 
-	left = v->spl_left;
-	v->spl_nleft = 0;
-	right = v->spl_right;
-	v->spl_nright = 0;
+	v->spl_left[v->spl_nleft++] = seed_1;
+	v->spl_right[v->spl_nright++] = seed_2;
 
-	datum_alpha = DatumGetNDBOX(entryvec->vector[seed_1].key);
-	datum_l = cube_union_v0(datum_alpha, datum_alpha);
-	rt_cube_size(datum_l, &size_l);
-	datum_beta = DatumGetNDBOX(entryvec->vector[seed_2].key);
-	datum_r = cube_union_v0(datum_beta, datum_beta);
-	rt_cube_size(datum_r, &size_r);
+	inserted_cubes[seed_1] = inserted_cubes[seed_2] = true;
+	
+	cube_left  = DatumGetNDBOX(entryvec->vector[seed_1].key);
+	cube_right = DatumGetNDBOX(entryvec->vector[seed_2].key);
+	
+	volume_left  = _cube_size(cube_left);
+	volume_right = _cube_size(cube_right);
 
 	/*
-	 * Now split up the regions between the two seeds.	An important property
-	 * of this split algorithm is that the split vector v has the indices of
-	 * items to be split in order in its left and right vectors.  We exploit
-	 * this property by doing a merge in the code that actually splits the
-	 * page.
-	 *
-	 * For efficiency, we also place the new index tuple in this loop. This is
-	 * handled at the very end, when we have placed all the existing tuples
-	 * and i == maxoff + 1.
+	 * insert cubes
 	 */
-
-	maxoff = OffsetNumberNext(maxoff);
-	for (i = FirstOffsetNumber; i <= maxoff; i = OffsetNumberNext(i))
+	remaining_count = nelems-2;
+	min_count = ceil(LIMIT_RATIO*(nelems - 1));
+	while (remaining_count > 0)
 	{
-		/*
-		 * If we've already decided where to place this item, just put it on
-		 * the right list.	Otherwise, we need to figure out which page needs
-		 * the least enlargement in order to store the item.
-		 */
+		diff_increase = 0.0;
 
-		if (i == seed_1)
+		/* check if there ehough cubes to satisfy mininum elements restriction */
+		if ((v->spl_nleft + remaining_count) <= min_count || (v->spl_nright + remaining_count) <= min_count )
+			break;
+
+		/* find cube with biggest diff_increase to insert it */
+		for (i = FirstOffsetNumber; i <= nelems; i = OffsetNumberNext(i))
 		{
-			*left++ = i;
-			v->spl_nleft++;
-			continue;
+			current_cube = DatumGetNDBOX(entryvec->vector[i].key);
+		
+			/* skip already inserted cubes */
+			if (inserted_cubes[i])
+				continue;
+
+			left_union = cube_union_v0(cube_left, current_cube);
+			current_increase_l = _cube_size(left_union) - volume_left;
+
+			right_union = cube_union_v0(cube_right, current_cube);
+			current_increase_r = _cube_size(right_union) - volume_right;
+
+			current_diff_increase = Abs(current_increase_l-current_increase_r);
+
+			if (current_diff_increase >= diff_increase)
+			{
+				diff_increase = current_diff_increase;
+				increase_l = current_increase_l;
+				increase_r = current_increase_r;
+				selected_offset = i;
+			}
 		}
-		else if (i == seed_2)
-		{
-			*right++ = i;
-			v->spl_nright++;
-			continue;
-		}
 
-		/* okay, which page needs least enlargement? */
-		datum_alpha = DatumGetNDBOX(entryvec->vector[i].key);
-		union_dl = cube_union_v0(datum_l, datum_alpha);
-		union_dr = cube_union_v0(datum_r, datum_alpha);
-		rt_cube_size(union_dl, &size_alpha);
-		rt_cube_size(union_dr, &size_beta);
-
-		/* pick which page to add it to */
-		if (size_alpha - size_l < size_beta - size_r)
+		selected_cube = DatumGetNDBOX(entryvec->vector[selected_offset].key);
+		if (increase_l < increase_r)
 		{
-			datum_l = union_dl;
-			size_l = size_alpha;
-			*left++ = i;
-			v->spl_nleft++;
+			v->spl_left[v->spl_nleft++] = selected_offset;
+			adjustBox(cube_left, selected_cube);
+			volume_left  = _cube_size(cube_left);
 		}
 		else
 		{
-			datum_r = union_dr;
-			size_r = size_beta;
-			*right++ = i;
-			v->spl_nright++;
+			v->spl_right[v->spl_nright++] = selected_offset;
+			adjustBox(cube_right, selected_cube);
+			volume_right  = _cube_size(cube_right);
+		}
+
+		inserted_cubes[selected_offset] = true;	/* mark this cube as inserted */
+		remaining_count--;
+	}
+
+	/* insert all remaining entries to one branch */
+	if (remaining_count > 0)
+	{
+		if (v->spl_nleft < v->spl_nright)
+		{
+			for (i = FirstOffsetNumber; i <= nelems; i = OffsetNumberNext(i))
+			{
+				if (!inserted_cubes[i]){
+					v->spl_left[v->spl_nleft++] = i;
+					adjustBox(cube_left, DatumGetNDBOX(entryvec->vector[i].key));
+				}
+			}
+		}
+		else
+		{
+			for (i = FirstOffsetNumber; i <= nelems; i = OffsetNumberNext(i))
+			{
+				if (!inserted_cubes[i]){
+					v->spl_right[v->spl_nright++] = i;
+					adjustBox(cube_right, DatumGetNDBOX(entryvec->vector[i].key));
+				}
+			}
 		}
 	}
-	*left = *right = FirstOffsetNumber; /* sentinel value, see dosplit() */
 
-	// printf("  splitvec:\n");
-	// printf("    nright: %i\n", v->spl_nright);
-	// printf("    nleft : %i\n", v->spl_nleft);
 
-	printf("%i %i\n", v->spl_nleft, v->spl_nright);
-
-	v->spl_ldatum = PointerGetDatum(datum_l);
-	v->spl_rdatum = PointerGetDatum(datum_r);
-
+	v->spl_ldatum = PointerGetDatum(cube_left);
+	v->spl_rdatum = PointerGetDatum(cube_right);
 	PG_RETURN_POINTER(v);
 }
 
@@ -889,7 +913,7 @@ cube_penalty(NDBOX *origentry, NDBOX *newentry)
 
 
 Datum
-g_cube_picksplit(PG_FUNCTION_ARGS)
+g_cube_picksplit_new(PG_FUNCTION_ARGS)
 {
 	GistEntryVector *entryvec = (GistEntryVector *) PG_GETARG_POINTER(0);
 	GIST_SPLITVEC *v = (GIST_SPLITVEC *) PG_GETARG_POINTER(1);
@@ -1320,7 +1344,7 @@ g_cube_binary_union(NDBOX *r1, NDBOX *r2, int *sizep)
 
 
 /* cube_union_v0 */
-NDBOX *
+static inline NDBOX *
 cube_union_v0(NDBOX *a, NDBOX *b)
 {
 	int			i;
@@ -1389,6 +1413,71 @@ cube_union(PG_FUNCTION_ARGS)
 	PG_RETURN_NDBOX(res);
 }
 
+static inline NDBOX*
+_cube_inter(NDBOX *a, NDBOX *b)
+{
+	NDBOX	   *result, *cube1, *cube2;
+	int			i;
+	double		edge1, edge2;
+
+	cube1 = (a->dim > b->dim) ? a : b;
+	cube2 = (a->dim <= b->dim) ? a : b;
+
+	result = palloc0(VARSIZE(cube1));
+	SET_VARSIZE(result, VARSIZE(cube1));
+	result->dim = cube1->dim;
+
+	/* compute the intersection */
+	for (i = 0; i < cube2->dim; i++)
+	{
+		edge1 = Max(
+			Min(cube1->x[i], cube1->x[i + cube1->dim]),
+			Min(cube2->x[i], cube2->x[i + cube2->dim])
+		);
+		edge2 = Min(
+			Max(cube1->x[i], cube1->x[i + cube1->dim]),
+			Max(cube2->x[i], cube2->x[i + cube2->dim])
+		);
+
+
+		if (edge1 <= edge2)
+		{
+			result->x[i] = edge1;
+			result->x[i + result->dim] = edge2;
+		}
+		else
+		{
+			result->x[i] = 0;
+			result->x[i + result->dim] = 0;
+		}
+	}
+
+	for (; i < cube2->dim; i++)
+	{
+		edge1 = Max(
+			Min(cube1->x[i], cube1->x[i + cube1->dim]),
+			0
+		);
+		edge2 = Min(
+			Max(cube1->x[i], cube1->x[i + cube1->dim]),
+			0
+		);
+
+		if (edge1 <= edge2)
+		{
+			result->x[i] = edge1;
+			result->x[i + result->dim] = edge2;
+		}
+		else
+		{
+			result->x[i] = 0;
+			result->x[i + result->dim] = 0;
+		}
+	}
+
+	return result;
+}
+
 /* cube_inter */
 Datum
 cube_inter(PG_FUNCTION_ARGS)
@@ -1396,70 +1485,11 @@ cube_inter(PG_FUNCTION_ARGS)
 	NDBOX	   *a = PG_GETARG_NDBOX(0);
 	NDBOX	   *b = PG_GETARG_NDBOX(1);
 	NDBOX	   *result;
-	bool		swapped = false;
-	int			i;
 
-	if (a->dim >= b->dim)
-	{
-		result = palloc0(VARSIZE(a));
-		SET_VARSIZE(result, VARSIZE(a));
-		result->dim = a->dim;
-	}
-	else
-	{
-		result = palloc0(VARSIZE(b));
-		SET_VARSIZE(result, VARSIZE(b));
-		result->dim = b->dim;
-	}
+	result = _cube_inter(a, b);
 
-	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
-	{
-		NDBOX	   *tmp = b;
-
-		b = a;
-		a = tmp;
-		swapped = true;
-	}
-
-	/*
-	 * use the potentially	smaller of the two boxes (b) to fill in the
-	 * result, padding absent dimensions with zeroes
-	 */
-	for (i = 0; i < b->dim; i++)
-	{
-		result->x[i] = Min(b->x[i], b->x[i + b->dim]);
-		result->x[i + a->dim] = Max(b->x[i], b->x[i + b->dim]);
-	}
-	for (i = b->dim; i < a->dim; i++)
-	{
-		result->x[i] = 0;
-		result->x[i + a->dim] = 0;
-	}
-
-	/* compute the intersection */
-	for (i = 0; i < a->dim; i++)
-	{
-		result->x[i] =
-			Max(Min(a->x[i], a->x[i + a->dim]), result->x[i]);
-		result->x[i + a->dim] = Min(Max(a->x[i],
-								   a->x[i + a->dim]), result->x[i + a->dim]);
-	}
-
-	if (swapped)
-	{
-		PG_FREE_IF_COPY(b, 0);
-		PG_FREE_IF_COPY(a, 1);
-	}
-	else
-	{
-		PG_FREE_IF_COPY(a, 0);
-		PG_FREE_IF_COPY(b, 1);
-	}
-
-	/*
-	 * Is it OK to return a non-null intersection for non-overlapping boxes?
-	 */
+	PG_FREE_IF_COPY(a, 0);
+	PG_FREE_IF_COPY(b, 1);
 	PG_RETURN_NDBOX(result);
 }
 
