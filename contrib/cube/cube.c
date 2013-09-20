@@ -145,6 +145,7 @@ static inline NDBOX	   *cube_union_v0(NDBOX *a, NDBOX *b);
 static inline NDBOX	   *_cube_inter(NDBOX *a, NDBOX *b);
 static inline void		rt_cube_size(NDBOX *a, double *sz);
 static inline double	distance_1D(double a1, double a2, double b1, double b2);
+static inline double	cube_penalty(NDBOX *origentry, NDBOX *newentry);
 
 static inline float 	non_negative(float val);
 static inline void		adjust_box(NDBOX *b, NDBOX *addon);
@@ -464,38 +465,16 @@ g_cube_penalty(PG_FUNCTION_ARGS)
 	GISTENTRY  *origentry = (GISTENTRY *) PG_GETARG_POINTER(0);
 	GISTENTRY  *newentry = (GISTENTRY *) PG_GETARG_POINTER(1);
 	float	   *result = (float *) PG_GETARG_POINTER(2);
-	NDBOX	   *ud;
-	double		tmp1,
-				tmp2;
 
-	ud = cube_union_v0(DatumGetNDBOX(origentry->key),
-					   DatumGetNDBOX(newentry->key));
-	rt_cube_size(ud, &tmp1);
-	rt_cube_size(DatumGetNDBOX(origentry->key), &tmp2);
-	*result = (float) (tmp1 - tmp2);
+	*result = cube_penalty(
+		DatumGetNDBOX(origentry->key),
+		DatumGetNDBOX(newentry->key)
+	);
 
 	/*
 	 * fprintf(stderr, "penalty\n"); fprintf(stderr, "\t%g\n", *result);
 	 */
 	PG_RETURN_FLOAT8(*result);
-}
-
-static inline double
-_cube_size(NDBOX *a)
-{
-	int			i,
-				j;
-	double		volume;
-
-	if (a == (NDBOX *) NULL)
-		return 0.0;
-	else
-	{
-		volume = 1.0;
-		for (i = 0, j = a->dim; i < a->dim; i++, j++)
-			volume = volume * Abs((a->x[j] - a->x[i]));
-	}
-	return volume;
 }
 
 /*
@@ -944,7 +923,7 @@ common_entry_cmp(const void *i1, const void *i2)
 		return 0;
 }
 
-static double
+static inline double
 cube_penalty(NDBOX *origentry, NDBOX *newentry)
 {
 	double		tmp1,
@@ -1501,7 +1480,9 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 					current_diff_increase,
 					diff_increase,
 					increase_l,
-					increase_r;
+					increase_r,
+					sz1,
+					sz2;
 	int				nbytes,
 					min_count,
 					remaining_count;
@@ -1532,7 +1513,9 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 			/* size_waste = size_union - size_inter; */
 			union_cube = cube_union_v0(cube_alpha, cube_beta);
 			inter_cube = _cube_inter(cube_alpha, cube_beta);
-			size_waste = _cube_size(union_cube) - _cube_size(inter_cube);
+			rt_cube_size(union_cube, &sz1);
+			rt_cube_size(inter_cube, &sz2);
+			size_waste = sz1 - sz2;
 
 			/*
 			 * are these a more promising split than what we've already seen?
@@ -1561,8 +1544,8 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 	cube_right = palloc(VARSIZE(cube));
 	memcpy(cube_right, cube, VARSIZE(cube));
 
-	volume_left  = _cube_size(cube_left);
-	volume_right = _cube_size(cube_right);
+	rt_cube_size(cube_left, &volume_left);
+	rt_cube_size(cube_right, &volume_right);
 
 	/*
 	 * insert cubes
@@ -1588,10 +1571,12 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 				continue;
 
 			left_union = cube_union_v0(cube_left, current_cube);
-			current_increase_l = _cube_size(left_union) - volume_left;
+			rt_cube_size(union_cube, &sz1);
+			current_increase_l = sz1 - volume_left;
 
 			right_union = cube_union_v0(cube_right, current_cube);
-			current_increase_r = _cube_size(right_union) - volume_right;
+			rt_cube_size(union_cube, &sz2);
+			current_increase_r = sz2 - volume_right;
 
 			current_diff_increase = Abs(current_increase_l-current_increase_r);
 
@@ -1610,13 +1595,13 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 		{
 			v->spl_left[v->spl_nleft++] = selected_offset;
 			adjust_box(cube_left, selected_cube);
-			volume_left  = _cube_size(cube_left);
+			rt_cube_size(cube_left, &volume_left);
 		}
 		else
 		{
 			v->spl_right[v->spl_nright++] = selected_offset;
 			adjust_box(cube_right, selected_cube);
-			volume_right  = _cube_size(cube_right);
+			rt_cube_size(cube_right, &volume_right);
 		}
 
 		inserted_cubes[selected_offset] = true;	/* mark this cube as inserted */
