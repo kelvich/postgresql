@@ -13,8 +13,6 @@ typedef struct NDBOX
 #define PG_GETARG_NDBOX(x)	DatumGetNDBOX( PG_DETOAST_DATUM(PG_GETARG_DATUM(x)) )
 #define PG_RETURN_NDBOX(x)	PG_RETURN_POINTER(x)
 
-
-
 /*
  * Represents information about an entry that can be placed to either group
  * without affecting overlap over selected axis ("common entry").
@@ -62,5 +60,9 @@ typedef struct
 /* Minimum accepted ratio of split */
 #define LIMIT_RATIO 0.3
 
-
+/* 
+ * We use Guttman split when cube dim >= SPLIT_THRESHOLD 
+ * and Korotkov split otherwise.
+ */
+#define SPLIT_THRESHOLD 6
 
