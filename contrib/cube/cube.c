@@ -139,15 +139,15 @@ static inline bool		cube_overlap_v0(NDBOX *a, NDBOX *b);
 static inline NDBOX	   *cube_union_v0(NDBOX *a, NDBOX *b);
 static inline NDBOX	   *_cube_inter(NDBOX *a, NDBOX *b);
 static inline void		rt_cube_size(NDBOX *a, double *sz);
-static inline NDBOX	   *g_cube_binary_union(NDBOX *r1, NDBOX *r2, int *sizep);
-static inline bool		g_cube_leaf_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
-static inline bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
+static inline void		adjustBox(NDBOX *b, NDBOX *addon);
+NDBOX	   *g_cube_binary_union(NDBOX *r1, NDBOX *r2, int *sizep);
+bool		g_cube_leaf_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
+bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strategy);
 
 /*
 ** Auxiliary funxtions
 */
 static inline double	distance_1D(double a1, double a2, double b1, double b2);
-static inline void		adjustBox(NDBOX *b, NDBOX *addon);
 
 /*****************************************************************************
  * Input/Output functions
@@ -515,7 +515,8 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 				   *current_cube,
 				   *left_union,
 				   *right_union,
-				   *selected_cube;
+				   *selected_cube,
+				   *cube;
 	double			size_waste,
 					waste,
 					volume_left,
@@ -536,14 +537,15 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 	nbytes = nelems*sizeof(OffsetNumber);
 	v->spl_left = (OffsetNumber *) palloc(nbytes);
 	v->spl_right = (OffsetNumber *) palloc(nbytes);
-	inserted_cubes = palloc0(nelems);
+	inserted_cubes = palloc0(nelems + 1);
 	v->spl_nleft = v->spl_nright = 0;
+
+	firsttime = true;
+	waste = 0.0;
 
 	/* 
 	 * pick two seed elements
 	 */
-	firsttime = true;
-	waste = 0.0;
 	for (i = FirstOffsetNumber; i <= nelems; i = OffsetNumberNext(i))
 	{
 		cube_alpha = DatumGetNDBOX(entryvec->vector[i].key);
@@ -570,14 +572,20 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 		}
 	}
 
+	/* selected elements became first elements in groups */
 	v->spl_left[v->spl_nleft++] = seed_1;
 	v->spl_right[v->spl_nright++] = seed_2;
-
 	inserted_cubes[seed_1] = inserted_cubes[seed_2] = true;
 	
-	cube_left  = DatumGetNDBOX(entryvec->vector[seed_1].key);
-	cube_right = DatumGetNDBOX(entryvec->vector[seed_2].key);
-	
+	/* bounding boxes for groups */
+	cube = DatumGetNDBOX(entryvec->vector[seed_1].key);
+	cube_left = palloc(VARSIZE(cube));
+	memcpy(cube_left, cube, VARSIZE(cube));
+
+	cube = DatumGetNDBOX(entryvec->vector[seed_2].key);
+	cube_right = palloc(VARSIZE(cube));
+	memcpy(cube_right, cube, VARSIZE(cube));
+
 	volume_left  = _cube_size(cube_left);
 	volume_right = _cube_size(cube_right);
 
@@ -586,6 +594,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 	 */
 	remaining_count = nelems-2;
 	min_count = ceil(LIMIT_RATIO*(nelems - 1));
+
 	while (remaining_count > 0)
 	{
 		diff_increase = 0.0;
@@ -620,6 +629,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 			}
 		}
 
+		/* now insert selected cube on leaf with minimal increase */
 		selected_cube = DatumGetNDBOX(entryvec->vector[selected_offset].key);
 		if (increase_l < increase_r)
 		{
@@ -638,7 +648,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 		remaining_count--;
 	}
 
-	/* insert all remaining entries to one branch */
+	/* insert all remaining entries (if any) to one branch */
 	if (remaining_count > 0)
 	{
 		if (v->spl_nleft < v->spl_nright)
@@ -663,7 +673,6 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
 		}
 	}
 
-
 	v->spl_ldatum = PointerGetDatum(cube_left);
 	v->spl_rdatum = PointerGetDatum(cube_right);
 	PG_RETURN_POINTER(v);
@@ -675,9 +684,7 @@ g_cube_picksplit(PG_FUNCTION_ARGS)
  * Korotkov Split
  * --------------------------------------------------------------------------
  */
-
-
-static void
+static inline void
 adjustBox(NDBOX *b, NDBOX *addon)
 {
 	int		i;
@@ -1413,6 +1420,7 @@ cube_union(PG_FUNCTION_ARGS)
 	PG_RETURN_NDBOX(res);
 }
 
+/* cube_inter */
 static inline NDBOX*
 _cube_inter(NDBOX *a, NDBOX *b)
 {
@@ -1478,7 +1486,6 @@ _cube_inter(NDBOX *a, NDBOX *b)
 	return result;
 }
 
-/* cube_inter */
 Datum
 cube_inter(PG_FUNCTION_ARGS)
 {
@@ -1510,7 +1517,7 @@ cube_size(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(result);
 }
 
-void
+static inline void
 rt_cube_size(NDBOX *a, double *size)
 {
 	int			i,
@@ -1529,7 +1536,7 @@ rt_cube_size(NDBOX *a, double *size)
 
 /* make up a metric in which one box will be 'lower' than the other
    -- this can be useful for sorting and to determine uniqueness */
-int32
+static inline int32
 cube_cmp_v0(NDBOX *a, NDBOX *b)
 {
 	int			i;
@@ -1716,7 +1723,7 @@ cube_ge(PG_FUNCTION_ARGS)
 
 /* Contains */
 /* Box(A) CONTAINS Box(B) IFF pt(A) < pt(B) */
-bool
+static inline bool
 cube_contains_v0(NDBOX *a, NDBOX *b)
 {
 	int			i;
@@ -1786,7 +1793,7 @@ cube_contained(PG_FUNCTION_ARGS)
 
 /* Overlap */
 /* Box(A) Overlap Box(B) IFF (pt(a)LL < pt(B)UR) && (pt(b)LL < pt(a)UR) */
-bool
+static inline bool
 cube_overlap_v0(NDBOX *a, NDBOX *b)
 {
 	int			i;
@@ -1900,7 +1907,7 @@ cube_distance(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(sqrt(distance));
 }
 
-static double
+static inline double
 distance_1D(double a1, double a2, double b1, double b2)
 {
 	/* interval (a) is entirely on the left of (b) */
