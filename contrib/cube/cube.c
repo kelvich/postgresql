@@ -1406,7 +1406,7 @@ g_cube_distance(PG_FUNCTION_ARGS)
 		if(coord > 0)
 			retval =  cube->x[coord-1];
 		else
-			retval = -cube->x[-1*coord-1 + cube->dim];
+			retval = -cube->x[-coord-1+cube->dim];
 	}
 	else
 	{
@@ -1497,7 +1497,7 @@ cube_coord(PG_FUNCTION_ARGS)
 	int			coord = PG_GETARG_INT16(1);
 
 	if ((-2*cube->dim <= coord) && (coord < 0))
-		PG_RETURN_FLOAT8(-1*cube->x[-1*coord - 1]);
+		PG_RETURN_FLOAT8(-cube->x[-coord - 1]);
 	else if ((0 < coord) && (coord <= 2*cube->dim))
 		PG_RETURN_FLOAT8(cube->x[coord - 1]);
 	else
