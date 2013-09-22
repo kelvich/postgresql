@@ -174,57 +174,6 @@ bool		g_cube_internal_consistent(NDBOX *key, NDBOX *query, StrategyNumber strate
 */
 static double distance_1D(double a1, double a2, double b1, double b2);
 
-PG_FUNCTION_INFO_V1(cube_type_in);
-Datum		cube_type_in(PG_FUNCTION_ARGS);
-// PG_FUNCTION_INFO_V1(cube_type_out);
-// Datum		cube_type_out(PG_FUNCTION_ARGS);
-
-
-PG_FUNCTION_INFO_V1(cube);
-Datum cube(PG_FUNCTION_ARGS);
-Datum cube(PG_FUNCTION_ARGS)
-{
-	NDBOX	   *arg = PG_GETARG_NDBOX(0);
-	int			len = PG_GETARG_INT32(1);
-	bool		isExplicit = PG_GETARG_BOOL(2);
-
-	// printf("cube: \n");
-	// printf("cube: len= %i\n",len);
-
-
-	PG_RETURN_NDBOX(arg);
-}
-
-Datum
-cube_type_in(PG_FUNCTION_ARGS)
-{
-	ArrayType  *args = PG_GETARG_ARRAYTYPE_P(0);
-	char   *arglist;
-
-	arglist = (char *) ARR_DATA_PTR(args);
-
-	// printf("cube_type_in: \n");
-	// printf("\t%i \n", ARRNELEMS(args));
-	// printf("\t%s \n", arglist);
-
-	PG_RETURN_INT32(13);
-}
-
-
-// Datum
-// cube_type_out(PG_FUNCTION_ARGS)
-// {
-// 	// ArrayType  *args = PG_GETARG_ARRAYTYPE_P(0);
-// 	// char   *arglist;
-
-// 	// arglist = (char *) ARR_DATA_PTR(args);
-
-// 	// printf("%i \n", ARRNELEMS(args));
-// 	// printf("%s \n", arglist);
-
-// 	PG_RETURN_CSTRING("hohoho");
-// 	// return a;
-// }
 
 /*****************************************************************************
  * Typed cube abstraction layer

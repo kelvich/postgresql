@@ -32,6 +32,7 @@ extern void cube_yyerror(NDBOX **result, const char *message);
 
 static int delim_count(char *s, char delim);
 static int check_dim(char *str1, char *str2);
+static void check_coord(double num, int type);
 static bool check_maxdim(int dim, char *str1);
 static NDBOX * write_box(int dim, char *str1, char *str2, char *typestr);
 static NDBOX * write_point_as_box(char *s, int dim, char *typestr);
