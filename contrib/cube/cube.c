@@ -307,7 +307,6 @@ cube_in(PG_FUNCTION_ARGS)
 	char	   *str = PG_GETARG_CSTRING(0);
 	NDBOX	   *result;
 
-	// printf("cube_in for %s\n", str);
 	cube_scanner_init(str);
 
 	if (cube_yyparse(&result) != 0)
