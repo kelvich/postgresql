@@ -310,6 +310,7 @@ cube_out(PG_FUNCTION_ARGS)
 	int			dim = DIM(cube);
 	int			i;
 	int			ndig;
+	bool		old_style_point = true;
 
 	initStringInfo(&buf);
 
@@ -330,10 +331,14 @@ cube_out(PG_FUNCTION_ARGS)
 		if (i > 0)
 			appendStringInfo(&buf, ", ");
 		appendStringInfo(&buf, "%.*g", ndig, LL_COORD(cube,i));
+
+		/* backward compatibility */
+		if (LL_COORD(cube,i) != UR_COORD(cube, i))
+			old_style_point = false;
 	}
 	appendStringInfoChar(&buf, ')');
 
-	if (!IS_POINT(cube))
+	if (!IS_POINT(cube) || !old_style_point)
 	{
 		appendStringInfo(&buf, ",(");
 		for (i = 0; i < dim; i++)
@@ -1295,10 +1300,18 @@ Datum
 cube_is_point(PG_FUNCTION_ARGS)
 {
 	NDBOX		*cube = PG_GETARG_NDBOX(0);
+	int			i;
+
 	if (IS_POINT(cube))
 		PG_RETURN_BOOL(TRUE);
-	else
-		PG_RETURN_BOOL(FALSE);
+
+	/* backward compatibility */
+	for (i=0; i<DIM(cube); i++)
+	{
+		if (LL_COORD(cube, i) != UR_COORD(cube, i))
+			PG_RETURN_BOOL(FALSE);
+	}
+	PG_RETURN_BOOL(TRUE);
 }
 
 /* Return dimensions in use in the data structure */
