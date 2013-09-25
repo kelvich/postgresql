@@ -148,7 +148,7 @@ static inline double	distance_1D(double a1, double a2, double b1, double b2);
 static inline double	cube_penalty(NDBOX *origentry, NDBOX *newentry);
 
 static inline float 	non_negative(float val);
-static inline void		adjust_box(NDBOX *b, NDBOX *addon);
+static inline NDBOX	   *adjust_box(NDBOX *b, NDBOX *addon);
 static inline void		cube_consider_split(ConsiderSplitContext *context, int dimNum,
 						  double rightLower, int minLeftCount,
 						  double leftUpper, int maxLeftCount);
@@ -859,17 +859,37 @@ cube_cmp_v0(NDBOX *a, NDBOX *b)
 	return 0;
 }
 
-static inline void
+static inline NDBOX*
 adjust_box(NDBOX *b, NDBOX *addon)
 {
-	int		i;
+	int			i, size;
+	NDBOX	   *cube;
+
+	if (b->dim >= addon->dim)
+		cube = b;
+	else
+	{
+		size = offsetof(NDBOX, x[0]) + 2*sizeof(double)*addon->dim;
+		cube = (NDBOX *) palloc0(size);
+		SET_VARSIZE(cube, size);
+		cube->dim = addon->dim;
+
+		for (i=0; i<b->dim; i++)
+			cube->x[cube->dim + i] = b->x[b->dim + i];
+
+		for (; i<cube->dim; i++)
+			cube->x[i] = cube->x[cube->dim + i] = 0;
+	}
+
 	for(i=0; i < addon->dim; i++)
 	{
-		if (b->x[i + b->dim] < addon->x[i + addon->dim])
-			b->x[i + b->dim] = addon->x[i + addon->dim];
-		if (b->x[i] > addon->x[i])
-			b->x[i] = addon->x[i];
+		if (cube->x[i + cube->dim] < addon->x[i + addon->dim])
+			cube->x[i + cube->dim] = addon->x[i + addon->dim];
+		if (cube->x[i] > addon->x[i])
+			cube->x[i] = addon->x[i];
 	}
+
+	return cube;
 }
 
 static int
@@ -1490,7 +1510,7 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 				   *inserted_cubes;
 
 	nelems = entryvec->n - 1;
-	nbytes = nelems*sizeof(OffsetNumber);
+	nbytes = nelems*sizeof(OffsetNumber) + 1;
 	v->spl_left = (OffsetNumber *) palloc(nbytes);
 	v->spl_right = (OffsetNumber *) palloc(nbytes);
 	inserted_cubes = palloc0(nelems + 1);
@@ -1594,13 +1614,13 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 		if (increase_l < increase_r)
 		{
 			v->spl_left[v->spl_nleft++] = selected_offset;
-			adjust_box(cube_left, selected_cube);
+			cube_left = adjust_box(cube_left, selected_cube);
 			rt_cube_size(cube_left, &volume_left);
 		}
 		else
 		{
 			v->spl_right[v->spl_nright++] = selected_offset;
-			adjust_box(cube_right, selected_cube);
+			cube_right = adjust_box(cube_right, selected_cube);
 			rt_cube_size(cube_right, &volume_right);
 		}
 
@@ -1617,7 +1637,7 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 			{
 				if (!inserted_cubes[i]){
 					v->spl_left[v->spl_nleft++] = i;
-					adjust_box(cube_left, DatumGetNDBOX(entryvec->vector[i].key));
+					cube_left = adjust_box(cube_left, DatumGetNDBOX(entryvec->vector[i].key));
 				}
 			}
 		}
@@ -1627,7 +1647,7 @@ guttman_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 			{
 				if (!inserted_cubes[i]){
 					v->spl_right[v->spl_nright++] = i;
-					adjust_box(cube_right, DatumGetNDBOX(entryvec->vector[i].key));
+					cube_right = adjust_box(cube_right, DatumGetNDBOX(entryvec->vector[i].key));
 				}
 			}
 		}
@@ -1675,7 +1695,7 @@ korotkov_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 			memcpy(context.boundingBox, box, VARSIZE(box));
 		}
 		else
-			adjust_box(context.boundingBox, box);
+			context.boundingBox = adjust_box(context.boundingBox, box);
 	}
 
 	/*
@@ -1848,7 +1868,7 @@ korotkov_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 #define PLACE_LEFT(box, off)					\
 	do {										\
 		if (v->spl_nleft > 0)					\
-			adjust_box(leftBox, box);			\
+			leftBox = adjust_box(leftBox, box);	\
 		else									\
 			*leftBox = *(box);					\
 		v->spl_left[v->spl_nleft++] = off;		\
@@ -1857,7 +1877,7 @@ korotkov_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 #define PLACE_RIGHT(box, off)					\
 	do {										\
 		if (v->spl_nright > 0)					\
-			adjust_box(rightBox, box);			\
+			rightBox = adjust_box(rightBox, box);\
 		else									\
 			*rightBox = *(box);					\
 		v->spl_right[v->spl_nright++] = off;	\
@@ -1995,7 +2015,7 @@ fallback_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 				*unionL = *cur;
 			}
 			else
-				adjust_box(unionL, cur);
+				unionL = adjust_box(unionL, cur);
 
 			v->spl_nleft++;
 		}
@@ -2008,7 +2028,7 @@ fallback_split(GistEntryVector *entryvec, GIST_SPLITVEC *v)
 				*unionR = *cur;
 			}
 			else
-				adjust_box(unionR, cur);
+				unionR = adjust_box(unionR, cur);
 
 			v->spl_nright++;
 		}
