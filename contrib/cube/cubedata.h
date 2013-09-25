@@ -64,5 +64,5 @@ typedef struct
  * We use Guttman split when cube dim >= SPLIT_THRESHOLD 
  * and Korotkov split otherwise.
  */
-#define SPLIT_THRESHOLD 6
+#define SPLIT_THRESHOLD 3
 
