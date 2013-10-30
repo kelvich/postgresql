@@ -145,6 +145,12 @@ RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
+-- Alias for backword compatibility
+CREATE FUNCTION cube_distance(cube, cube)
+RETURNS float8
+AS 'MODULE_PATHNAME', 'distance_euclid'
+LANGUAGE C IMMUTABLE STRICT;
+
 CREATE FUNCTION distance_chebyshev(cube, cube)
 RETURNS float8
 AS 'MODULE_PATHNAME'

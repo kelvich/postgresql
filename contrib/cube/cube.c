@@ -1279,7 +1279,7 @@ distance_taxicab(PG_FUNCTION_ARGS)
 	int			i;
 
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
 		b = a;
@@ -1289,12 +1289,12 @@ distance_taxicab(PG_FUNCTION_ARGS)
 
 	distance = 0.0;
 	/* compute within the dimensions of (b) */
-	for (i = 0; i < b->dim; i++)
-		distance += abs(distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]));
+	for (i = 0; i < DIM(b); i++)
+		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
 
 	/* compute distance to zero for those dimensions in (a) absent in (b) */
-	for (i = b->dim; i < a->dim; i++)
-		distance += abs(distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0));
+	for (i = DIM(b); i < DIM(a); i++)
+		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
 
 	if (swapped)
 	{
@@ -1380,7 +1380,7 @@ distance_chebyshev(PG_FUNCTION_ARGS)
 	int			i;
 
 	/* swap the box pointers if needed */
-	if (a->dim < b->dim)
+	if (DIM(a) < DIM(b))
 	{
 		NDBOX	   *tmp = b;
 		b = a;
@@ -1390,17 +1390,17 @@ distance_chebyshev(PG_FUNCTION_ARGS)
 
 	distance = 0.0;
 	/* compute within the dimensions of (b) */
-	for (i = 0; i < b->dim; i++)
+	for (i = 0; i < DIM(b); i++)
 	{
-		d = abs(distance_1D(a->x[i], a->x[i + a->dim], b->x[i], b->x[i + b->dim]));
+		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
 		if (d > distance)
 			distance = d;
 	}
 
 	/* compute distance to zero for those dimensions in (a) absent in (b) */
-	for (i = b->dim; i < a->dim; i++)
+	for (i = DIM(b); i < DIM(a); i++)
 	{
-		d = abs(distance_1D(a->x[i], a->x[i + a->dim], 0.0, 0.0));
+		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
 		if (d > distance)
 			distance = d;
 	}
@@ -1431,9 +1431,9 @@ g_cube_distance(PG_FUNCTION_ARGS)
 	{
 		int coord = PG_GETARG_INT32(1);
 		if(coord > 0)
-			retval =  cube->x[coord-1];
+			retval = LL_COORD(cube, coord-1);
 		else
-			retval = -cube->x[-coord-1+cube->dim];
+			retval = -UR_COORD(cube, -coord-1);
 	}
 	else
 	{
@@ -1441,13 +1441,16 @@ g_cube_distance(PG_FUNCTION_ARGS)
 		switch(strategy)
 		{
 		case 16:
-			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab, PointerGetDatum(cube), PointerGetDatum(query)));
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab,
+				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		case 17:
-			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid, PointerGetDatum(cube), PointerGetDatum(query)));
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid,
+				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		case 18:
-			retval = DatumGetFloat8(DirectFunctionCall2(distance_chebyshev, PointerGetDatum(cube), PointerGetDatum(query)));
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_chebyshev,
+				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		}
 	}
@@ -1539,10 +1542,12 @@ cube_coord(PG_FUNCTION_ARGS)
 	NDBOX	   *cube = PG_GETARG_NDBOX(0);
 	int			coord = PG_GETARG_INT16(1);
 
-	if ((-2*cube->dim <= coord) && (coord < 0))
-		PG_RETURN_FLOAT8(-cube->x[-coord - 1]);
-	else if ((0 < coord) && (coord <= 2*cube->dim))
-		PG_RETURN_FLOAT8(cube->x[coord - 1]);
+	if ((0 < coord) && (coord <= 2*DIM(cube)))
+		PG_RETURN_FLOAT8(LL_COORD(cube, coord-1));
+
+	else if ((-2*DIM(cube) <= coord) && (coord < 0))
+		PG_RETURN_FLOAT8(-LL_COORD(cube, coord-1));
+	
 	else
 		ereport(ERROR,
 					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
