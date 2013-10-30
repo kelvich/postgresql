@@ -663,6 +663,11 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 			/* empty pages are always all-visible */
 			if (!PageIsAllVisible(page))
 			{
+				START_CRIT_SECTION();
+
+				/* mark buffer dirty before writing a WAL record */
+				MarkBufferDirty(buf);
+
 				/*
 				 * It's possible that another backend has extended the heap,
 				 * initialized the page, and then failed to WAL-log the page
@@ -682,9 +687,9 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 					log_newpage_buffer(buf);
 
 				PageSetAllVisible(page);
-				MarkBufferDirty(buf);
 				visibilitymap_set(onerel, blkno, buf, InvalidXLogRecPtr,
 								  vmbuffer, InvalidTransactionId);
+				END_CRIT_SECTION();
 			}
 
 			UnlockReleaseBuffer(buf);
@@ -900,6 +905,7 @@ lazy_scan_heap(Relation onerel, LVRelStats *vacrelstats,
 		{
 			/* Remove tuples from heap */
 			lazy_vacuum_page(onerel, blkno, buf, 0, vacrelstats, &vmbuffer);
+			has_dead_tuples = false;
 
 			/*
 			 * Forget the now-vacuumed tuples, and press on, but be careful

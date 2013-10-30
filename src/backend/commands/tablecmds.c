@@ -3857,6 +3857,12 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 				/* Preserve OID, if any */
 				if (newTupDesc->tdhasoid)
 					HeapTupleSetOid(tuple, tupOid);
+
+				/*
+				 * Constraints might reference the tableoid column, so initialize
+				 * t_tableOid before evaluating them.
+				 */
+				tuple->t_tableOid = RelationGetRelid(oldrel);
 			}
 
 			/* Now check any constraints on the possibly-changed tuple */
@@ -8800,7 +8806,8 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 		if (check_option)
 		{   
 			const char *view_updatable_error =
-				view_query_is_auto_updatable(view_query, security_barrier);
+				view_query_is_auto_updatable(view_query,
+											 security_barrier, true);
 
 			if (view_updatable_error)
 				ereport(ERROR,
