@@ -1254,19 +1254,58 @@ cube_overlap(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
-static double
-distance_1D(double a1, double a2, double b1, double b2)
+/* Distance */
+/* The distance is computed as a per axis sum of the squared distances
+   between 1D projections of the boxes onto Cartesian axes. Assuming zero
+   distance between overlapping projections, this metric coincides with the
+   "common sense" geometric distance */
+Datum
+distance_euclid(PG_FUNCTION_ARGS)
 {
-	/* interval (a) is entirely on the left of (b) */
-	if ((a1 <= b1) && (a2 <= b1) && (a1 <= b2) && (a2 <= b2))
-		return (Min(b1, b2) - Max(a1, a2));
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		d,
+				distance;
+	int			i;
 
-	/* interval (a) is entirely on the right of (b) */
-	if ((a1 > b1) && (a2 > b1) && (a1 > b2) && (a2 > b2))
-		return (Min(a1, a2) - Max(b1, b2));
+	/* swap the box pointers if needed */
+	if (DIM(a) < DIM(b))
+	{
+		NDBOX	   *tmp = b;
 
-	/* the rest are all sorts of intersections */
-	return (0.0);
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < DIM(b); i++)
+	{
+		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i));
+		distance += d * d;
+	}
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = DIM(b); i < DIM(a); i++)
+	{
+		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0);
+		distance += d * d;
+	}
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(sqrt(distance));
 }
 
 Datum
@@ -1310,66 +1349,6 @@ distance_taxicab(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(distance);
 }
 
-/* Distance */
-/* The distance is computed as a per axis sum of the squared distances
-   between 1D projections of the boxes onto Cartesian axes. Assuming zero
-   distance between overlapping projections, this metric coincides with the
-   "common sense" geometric distance */
-Datum
-distance_euclid(PG_FUNCTION_ARGS)
-{
-	NDBOX	   *a = PG_GETARG_NDBOX(0),
-			   *b = PG_GETARG_NDBOX(1);
-	bool		swapped = false;
-	double		d,
-				distance;
-	int			i;
-
-	/* swap the box pointers if needed */
-	if (DIM(a) < DIM(b))
-	{
-		NDBOX	   *tmp = b;
-		b = a;
-		a = tmp;
-		swapped = true;
-	}
-
-	distance = 0.0;
-	/* compute within the dimensions of (b) */
-	for (i = 0; i < DIM(b); i++)
-	{
-		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i));
-		distance += d * d;
-	}
-
-	/* compute distance to zero for those dimensions in (a) absent in (b) */
-	for (i = DIM(b); i < DIM(a); i++)
-	{
-		d = distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0);
-		distance += d * d;
-	}
-
-	distance = sqrt(distance);
-
-	if (swapped)
-	{
-		PG_FREE_IF_COPY(b, 0);
-		PG_FREE_IF_COPY(a, 1);
-	}
-	else
-	{
-		PG_FREE_IF_COPY(a, 0);
-		PG_FREE_IF_COPY(b, 1);
-	}
-
-	PG_RETURN_FLOAT8(distance);
-}
-
-/* Distance */
-/* The distance is computed as a per axis sum of the squared distances
-   between 1D projections of the boxes onto Cartesian axes. Assuming zero
-   distance between overlapping projections, this metric coincides with the
-   "common sense" geometric distance */
 Datum
 distance_chebyshev(PG_FUNCTION_ARGS)
 {
@@ -1455,6 +1434,21 @@ g_cube_distance(PG_FUNCTION_ARGS)
 		}
 	}
 	PG_RETURN_FLOAT8(retval);
+}
+
+static double
+distance_1D(double a1, double a2, double b1, double b2)
+{
+	/* interval (a) is entirely on the left of (b) */
+	if ((a1 <= b1) && (a2 <= b1) && (a1 <= b2) && (a2 <= b2))
+		return (Min(b1, b2) - Max(a1, a2));
+
+	/* interval (a) is entirely on the right of (b) */
+	if ((a1 > b1) && (a2 > b1) && (a1 > b2) && (a2 > b2))
+		return (Min(a1, a2) - Max(b1, b2));
+
+	/* the rest are all sorts of intersections */
+	return (0.0);
 }
 
 /* Test if a box is also a point */
