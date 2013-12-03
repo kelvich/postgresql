@@ -1409,10 +1409,27 @@ g_cube_distance(PG_FUNCTION_ARGS)
 	if (strategy == 15)
 	{
 		int coord = PG_GETARG_INT32(1);
+
 		if(coord > 0)
-			retval = LL_COORD(cube, coord-1);
+			if IS_POINT(cube)
+				retval = (cube)->x[(coord-1)%DIM(cube)];
+			else
+				/* This is for right traversal of non-leaf elements */
+				retval = Min(
+					(cube)->x[(coord-1)%DIM(cube)],
+					(cube)->x[(coord-1)%DIM(cube) + DIM(cube)]
+				);
+
+		/* negative coordinate user for descending sort */
 		else
-			retval = -UR_COORD(cube, -coord-1);
+			if IS_POINT(cube)
+				retval = -(cube)->x[(-coord-1)%DIM(cube)];
+			else
+				/* This is for right traversal of non-leaf elements */
+				retval = Min(
+					-(cube)->x[(-coord-1)%DIM(cube)],
+					-(cube)->x[(-coord-1)%DIM(cube) + DIM(cube)]
+				);
 	}
 	else
 	{
@@ -1530,6 +1547,14 @@ cube_ur_coord(PG_FUNCTION_ARGS)
 	PG_RETURN_FLOAT8(result);
 }
 
+/*
+ * Function returns cube coordinate.
+ * Numbers from 1 to DIM denotes Lower Left corner coordinates.
+ * Numbers from DIM+1 to 2*DIM denotes Upper Right cube corner coordinates.
+ * If negative number passed to function it is treated as it's absolut value,
+ * but resulting coordinate will be returned with changed sign. This
+ * convention useful for descending sort by this coordinate.
+ */
 Datum
 cube_coord(PG_FUNCTION_ARGS)
 {
@@ -1537,11 +1562,17 @@ cube_coord(PG_FUNCTION_ARGS)
 	int			coord = PG_GETARG_INT16(1);
 
 	if ((0 < coord) && (coord <= 2*DIM(cube)))
-		PG_RETURN_FLOAT8(LL_COORD(cube, coord-1));
+		if IS_POINT(cube)
+			PG_RETURN_FLOAT8( (cube)->x[(-1+coord)%DIM(cube)] );
+		else
+			PG_RETURN_FLOAT8( (cube)->x[-1+coord] );
 
 	else if ((-2*DIM(cube) <= coord) && (coord < 0))
-		PG_RETURN_FLOAT8(-LL_COORD(cube, coord-1));
-	
+		if IS_POINT(cube)
+			PG_RETURN_FLOAT8( -(cube)->x[(-1-coord)%DIM(cube)] );
+		else
+			PG_RETURN_FLOAT8( -(cube)->x[-1-coord] );
+
 	else
 		ereport(ERROR,
 					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
