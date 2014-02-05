@@ -92,7 +92,7 @@
  * heap's TOAST table will go through the normal bufmgr.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994-5, Regents of the University of California
  *
  * IDENTIFICATION
@@ -345,7 +345,7 @@ rewrite_heap_tuple(RewriteState state,
 
 	/*
 	 * While we have our hands on the tuple, we may as well freeze any
-	 * very-old xmin or xmax, so that future VACUUM effort can be saved.
+	 * eligible xmin or xmax, so that future VACUUM effort can be saved.
 	 */
 	heap_freeze_tuple(new_tuple->t_data, state->rs_freeze_xid,
 					  state->rs_cutoff_multi);
@@ -601,9 +601,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	if (len > MaxHeapTupleSize)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-				 errmsg("row is too big: size %lu, maximum size %lu",
-						(unsigned long) len,
-						(unsigned long) MaxHeapTupleSize)));
+				 errmsg("row is too big: size %zu, maximum size %zu",
+						len, MaxHeapTupleSize)));
 
 	/* Compute desired extra freespace due to fillfactor option */
 	saveFreeSpace = RelationGetTargetPageFreeSpace(state->rs_new_rel,

@@ -5,7 +5,7 @@
  *	  commands.  At one time acted as an interface between the Lisp and C
  *	  systems.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -243,6 +243,7 @@ check_xact_readonly(Node *parsetree)
 		case T_AlterUserMappingStmt:
 		case T_DropUserMappingStmt:
 		case T_AlterTableSpaceOptionsStmt:
+		case T_AlterTableSpaceMoveStmt:
 		case T_CreateForeignTableStmt:
 		case T_SecLabelStmt:
 			PreventCommandIfReadOnly(CreateCommandTag(parsetree));
@@ -548,6 +549,11 @@ standard_ProcessUtility(Node *parsetree,
 			AlterTableSpaceOptions((AlterTableSpaceOptionsStmt *) parsetree);
 			break;
 
+		case T_AlterTableSpaceMoveStmt:
+			/* no event triggers for global objects */
+			AlterTableSpaceMove((AlterTableSpaceMoveStmt *) parsetree);
+			break;
+
 		case T_TruncateStmt:
 			ExecuteTruncate((TruncateStmt *) parsetree);
 			break;
@@ -685,6 +691,11 @@ standard_ProcessUtility(Node *parsetree,
 
 		case T_ExplainStmt:
 			ExplainQuery((ExplainStmt *) parsetree, queryString, params, dest);
+			break;
+
+		case T_AlterSystemStmt:
+			PreventTransactionChain(isTopLevel, "ALTER SYSTEM");
+			AlterSystemSetConfigFile((AlterSystemStmt *) parsetree);
 			break;
 
 		case T_VariableSetStmt:
@@ -1817,6 +1828,10 @@ CreateCommandTag(Node *parsetree)
 			tag = "ALTER TABLESPACE";
 			break;
 
+		case T_AlterTableSpaceMoveStmt:
+			tag = "ALTER TABLESPACE";
+			break;
+
 		case T_CreateExtensionStmt:
 			tag = "CREATE EXTENSION";
 			break;
@@ -2155,6 +2170,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_RefreshMatViewStmt:
 			tag = "REFRESH MATERIALIZED VIEW";
+			break;
+
+		case T_AlterSystemStmt:
+			tag = "ALTER SYSTEM";
 			break;
 
 		case T_VariableSetStmt:
@@ -2505,6 +2524,10 @@ GetCommandLogLevel(Node *parsetree)
 			lev = LOGSTMT_DDL;
 			break;
 
+		case T_AlterTableSpaceMoveStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
 		case T_CreateExtensionStmt:
 		case T_AlterExtensionStmt:
 		case T_AlterExtensionContentsStmt:
@@ -2724,6 +2747,10 @@ GetCommandLogLevel(Node *parsetree)
 
 		case T_RefreshMatViewStmt:
 			lev = LOGSTMT_DDL;
+			break;
+
+		case T_AlterSystemStmt:
+			lev = LOGSTMT_ALL;
 			break;
 
 		case T_VariableSetStmt:

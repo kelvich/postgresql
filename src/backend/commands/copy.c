@@ -3,7 +3,7 @@
  * copy.c
  *		Implements the COPY utility command
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -2199,8 +2199,8 @@ CopyFrom(CopyState cstate)
 		{
 			/*
 			 * Reset the per-tuple exprcontext. We can only do this if the
-			 * tuple buffer is empty (calling the context the per-tuple memory
-			 * context is a bit of a misnomer now
+			 * tuple buffer is empty. (Calling the context the per-tuple memory
+			 * context is a bit of a misnomer now.)
 			 */
 			ResetPerTupleExprContext(estate);
 		}
@@ -2519,9 +2519,20 @@ BeginCopyFrom(Relation rel,
 				defmap[num_defaults] = attnum - 1;
 				num_defaults++;
 
-				/* Check to see if we have any volatile expressions */
+				/*
+				 * If a default expression looks at the table being loaded, then
+				 * it could give the wrong answer when using multi-insert. Since
+				 * database access can be dynamic this is hard to test for
+				 * exactly, so we use the much wider test of whether the
+				 * default expression is volatile. We allow for the special case
+				 * of when the default expression is the nextval() of a sequence
+				 * which in this specific case is known to be safe for use with
+				 * the multi-insert optimisation. Hence we use this special case
+				 * function checker rather than the standard check for
+				 * contain_volatile_functions().
+				 */
 				if (!volatile_defexprs)
-					volatile_defexprs = contain_volatile_functions((Node *) defexpr);
+					volatile_defexprs = contain_volatile_functions_not_nextval((Node *)defexpr);
 			}
 		}
 	}

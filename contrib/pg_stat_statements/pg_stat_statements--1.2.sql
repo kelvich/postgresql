@@ -1,4 +1,4 @@
-/* contrib/pg_stat_statements/pg_stat_statements--1.1.sql */
+/* contrib/pg_stat_statements/pg_stat_statements--1.2.sql */
 
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION pg_stat_statements" to load this file. \quit
@@ -9,9 +9,10 @@ RETURNS void
 AS 'MODULE_PATHNAME'
 LANGUAGE C;
 
-CREATE FUNCTION pg_stat_statements(
+CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT userid oid,
     OUT dbid oid,
+    OUT queryid bigint,
     OUT query text,
     OUT calls int8,
     OUT total_time float8,
@@ -30,12 +31,12 @@ CREATE FUNCTION pg_stat_statements(
     OUT blk_write_time float8
 )
 RETURNS SETOF record
-AS 'MODULE_PATHNAME'
-LANGUAGE C;
+AS 'MODULE_PATHNAME', 'pg_stat_statements_1_2'
+LANGUAGE C STRICT VOLATILE;
 
 -- Register a view on the function for ease of use.
 CREATE VIEW pg_stat_statements AS
-  SELECT * FROM pg_stat_statements();
+  SELECT * FROM pg_stat_statements(true);
 
 GRANT SELECT ON pg_stat_statements TO PUBLIC;
 

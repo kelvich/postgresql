@@ -14,7 +14,7 @@
  * only one ID number.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/storage/pg_shmem.h
@@ -38,6 +38,16 @@ typedef struct PGShmemHeader	/* standard header for all Postgres shmem */
 #endif
 } PGShmemHeader;
 
+/* GUC variable */
+extern int huge_tlb_pages;
+
+/* Possible values for huge_tlb_pages */
+typedef enum
+{
+	HUGE_TLB_OFF,
+	HUGE_TLB_ON,
+	HUGE_TLB_TRY
+} HugeTlbType;
 
 #ifdef EXEC_BACKEND
 #ifndef WIN32

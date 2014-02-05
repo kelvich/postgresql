@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2013, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2014, PostgreSQL Global Development Group
  *
  * src/bin/psql/tab-complete.c
  */
@@ -541,6 +541,12 @@ static const SchemaQuery Query_for_list_of_matviews = {
 "SELECT pg_catalog.quote_ident(nspname) FROM pg_catalog.pg_namespace "\
 " WHERE substring(pg_catalog.quote_ident(nspname),1,%d)='%s'"
 
+#define Query_for_list_of_alter_system_set_vars \
+"SELECT name FROM "\
+" (SELECT pg_catalog.lower(name) AS name FROM pg_catalog.pg_settings "\
+"  WHERE context != 'internal') ss "\
+" WHERE substring(name,1,%d)='%s'"
+
 #define Query_for_list_of_set_vars \
 "SELECT name FROM "\
 " (SELECT pg_catalog.lower(name) AS name FROM pg_catalog.pg_settings "\
@@ -930,7 +936,7 @@ psql_completion(char *text, int start, int end)
 		{"AGGREGATE", "COLLATION", "CONVERSION", "DATABASE", "DEFAULT PRIVILEGES", "DOMAIN",
 			"EXTENSION", "FOREIGN DATA WRAPPER", "FOREIGN TABLE", "FUNCTION",
 			"GROUP", "INDEX", "LANGUAGE", "LARGE OBJECT", "MATERIALIZED VIEW", "OPERATOR",
-			"ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "TABLE",
+			 "ROLE", "RULE", "SCHEMA", "SERVER", "SEQUENCE", "SYSTEM SET", "TABLE",
 			"TABLESPACE", "TEXT SEARCH", "TRIGGER", "TYPE",
 		"USER", "USER MAPPING FOR", "VIEW", NULL};
 
@@ -1263,6 +1269,11 @@ psql_completion(char *text, int start, int end)
 
 		COMPLETE_WITH_LIST(list_ALTER_SERVER);
 	}
+	/* ALTER SYSTEM SET <name> */
+	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev2_wd, "SYSTEM") == 0 &&
+			 pg_strcasecmp(prev_wd, "SET") == 0)
+		COMPLETE_WITH_QUERY(Query_for_list_of_alter_system_set_vars);
 	/* ALTER VIEW <name> */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "VIEW") == 0)
@@ -1611,12 +1622,12 @@ psql_completion(char *text, int start, int end)
 		COMPLETE_WITH_CONST("IDENTITY");
 	}
 
-	/* ALTER TABLESPACE <foo> with RENAME TO, OWNER TO, SET, RESET */
+	/* ALTER TABLESPACE <foo> with RENAME TO, OWNER TO, SET, RESET, MOVE */
 	else if (pg_strcasecmp(prev3_wd, "ALTER") == 0 &&
 			 pg_strcasecmp(prev2_wd, "TABLESPACE") == 0)
 	{
 		static const char *const list_ALTERTSPC[] =
-		{"RENAME TO", "OWNER TO", "SET", "RESET", NULL};
+		{"RENAME TO", "OWNER TO", "SET", "RESET", "MOVE", NULL};
 
 		COMPLETE_WITH_LIST(list_ALTERTSPC);
 	}
@@ -1637,6 +1648,27 @@ psql_completion(char *text, int start, int end)
 		{"seq_page_cost", "random_page_cost", NULL};
 
 		COMPLETE_WITH_LIST(list_TABLESPACEOPTIONS);
+	}
+	/* ALTER TABLESPACE <foo> MOVE ALL|TABLES|INDEXES|MATERIALIZED VIEWS */
+	else if (pg_strcasecmp(prev4_wd, "ALTER") == 0 &&
+			 pg_strcasecmp(prev3_wd, "TABLESPACE") == 0 &&
+			 pg_strcasecmp(prev_wd, "MOVE") == 0)
+	{
+		static const char *const list_TABLESPACEMOVETARGETS[] =
+		{"ALL", "TABLES", "INDEXES", "MATERIALIZED VIEWS", NULL};
+
+		COMPLETE_WITH_LIST(list_TABLESPACEMOVETARGETS);
+	}
+	else if ((pg_strcasecmp(prev4_wd, "TABLESPACE") == 0 &&
+			  pg_strcasecmp(prev2_wd, "MOVE") == 0) ||
+			 (pg_strcasecmp(prev5_wd, "TABLESPACE") == 0 &&
+			  pg_strcasecmp(prev3_wd, "MOVE") == 0 &&
+			  pg_strcasecmp(prev2_wd, "MATERIALIZED") == 0))
+	{
+		static const char *const list_TABLESPACEMOVEOPTIONS[] =
+		{"OWNED BY", "TO", NULL};
+
+		COMPLETE_WITH_LIST(list_TABLESPACEMOVEOPTIONS);
 	}
 
 	/* ALTER TEXT SEARCH */
@@ -2548,8 +2580,9 @@ psql_completion(char *text, int start, int end)
 	 * but we may as well tab-complete both: perhaps some users prefer one
 	 * variant or the other.
 	 */
-	else if (pg_strcasecmp(prev3_wd, "FETCH") == 0 ||
-			 pg_strcasecmp(prev3_wd, "MOVE") == 0)
+	else if ((pg_strcasecmp(prev3_wd, "FETCH") == 0 ||
+			  pg_strcasecmp(prev3_wd, "MOVE") == 0) &&
+			 pg_strcasecmp(prev_wd, "TO") != 0)
 	{
 		static const char *const list_FROMIN[] =
 		{"FROM", "IN", NULL};

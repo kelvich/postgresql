@@ -3,7 +3,7 @@
  * basebackup.c
  *	  code for taking a base backup and streaming it to a standby
  *
- * Portions Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2014, PostgreSQL Global Development Group
  *
  * IDENTIFICATION
  *	  src/backend/replication/basebackup.c
@@ -25,6 +25,7 @@
 #include "libpq/pqformat.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
+#include "pgstat.h"
 #include "replication/basebackup.h"
 #include "replication/walsender.h"
 #include "replication/walsender_private.h"
@@ -45,7 +46,7 @@ typedef struct
 } basebackup_options;
 
 
-static int64 sendDir(char *path, int basepathlen, bool sizeonly);
+static int64 sendDir(char *path, int basepathlen, bool sizeonly, List *tablespaces);
 static int64 sendTablespace(char *path, bool sizeonly);
 static bool sendFile(char *readfilename, char *tarfilename,
 		 struct stat * statbuf, bool missing_ok);
@@ -63,6 +64,9 @@ static int	compareWalFileNames(const void *a, const void *b);
 /* Was the backup currently in-progress initiated in recovery mode? */
 static bool backup_started_in_recovery = false;
 
+/* Relative path of temporary statistics directory */
+static char *statrelpath = NULL;
+
 /*
  * Size of each block sent into the tar stream for larger files.
  */
@@ -72,6 +76,7 @@ typedef struct
 {
 	char	   *oid;
 	char	   *path;
+	char	   *rpath;			/* relative path within PGDATA, or NULL */
 	int64		size;
 } tablespaceinfo;
 
@@ -100,12 +105,27 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 	XLogRecPtr	endptr;
 	TimeLineID	endtli;
 	char	   *labelfile;
+	int			datadirpathlen;
+
+	datadirpathlen = strlen(DataDir);
 
 	backup_started_in_recovery = RecoveryInProgress();
 
 	startptr = do_pg_start_backup(opt->label, opt->fastcheckpoint, &starttli,
 								  &labelfile);
 	SendXlogRecPtrResult(startptr, starttli);
+
+	/*
+	 * Calculate the relative path of temporary statistics directory
+	 * in order to skip the files which are located in that directory later.
+	 */
+	if (is_absolute_path(pgstat_stat_directory) &&
+		strncmp(pgstat_stat_directory, DataDir, datadirpathlen) == 0)
+		statrelpath = psprintf("./%s", pgstat_stat_directory + datadirpathlen + 1);
+	else if (strncmp(pgstat_stat_directory, "./", 2) != 0)
+		statrelpath = psprintf("./%s", pgstat_stat_directory);
+	else
+		statrelpath = pgstat_stat_directory;
 
 	PG_ENSURE_ERROR_CLEANUP(base_backup_cleanup, (Datum) 0);
 	{
@@ -119,6 +139,7 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 		{
 			char		fullpath[MAXPGPATH];
 			char		linkpath[MAXPGPATH];
+			char	   *relpath = NULL;
 			int			rllen;
 
 			/* Skip special stuff */
@@ -145,9 +166,20 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 			}
 			linkpath[rllen] = '\0';
 
+			/*
+			 * Relpath holds the relative path of the tablespace directory
+			 * when it's located within PGDATA, or NULL if it's located
+			 * elsewhere.
+			 */
+			if (rllen > datadirpathlen &&
+				strncmp(linkpath, DataDir, datadirpathlen) == 0 &&
+				IS_DIR_SEP(linkpath[datadirpathlen]))
+				relpath = linkpath + datadirpathlen + 1;
+
 			ti = palloc(sizeof(tablespaceinfo));
 			ti->oid = pstrdup(de->d_name);
 			ti->path = pstrdup(linkpath);
+			ti->rpath = relpath ? pstrdup(relpath) : NULL;
 			ti->size = opt->progress ? sendTablespace(fullpath, true) : -1;
 			tablespaces = lappend(tablespaces, ti);
 #else
@@ -165,7 +197,7 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 
 		/* Add a node for the base directory at the end */
 		ti = palloc0(sizeof(tablespaceinfo));
-		ti->size = opt->progress ? sendDir(".", 1, true) : -1;
+		ti->size = opt->progress ? sendDir(".", 1, true, tablespaces) : -1;
 		tablespaces = lappend(tablespaces, ti);
 
 		/* Send tablespace header */
@@ -191,7 +223,7 @@ perform_base_backup(basebackup_options *opt, DIR *tblspcdir)
 				sendFileWithContent(BACKUP_LABEL_FILE, labelfile);
 
 				/* ... then the bulk of the files ... */
-				sendDir(".", 1, false);
+				sendDir(".", 1, false, tablespaces);
 
 				/* ... and pg_control after everything else. */
 				if (lstat(XLOG_CONTROL_FILE, &statbuf) != 0)
@@ -744,6 +776,8 @@ sendFileWithContent(const char *filename, const char *content)
  * Include the tablespace directory pointed to by 'path' in the output tar
  * stream.	If 'sizeonly' is true, we just calculate a total length and return
  * it, without actually sending anything.
+ *
+ * Only used to send auxiliary tablespaces, not PGDATA.
  */
 static int64
 sendTablespace(char *path, bool sizeonly)
@@ -779,7 +813,7 @@ sendTablespace(char *path, bool sizeonly)
 	size = 512;					/* Size of the header just added */
 
 	/* Send all the files in the tablespace version directory */
-	size += sendDir(pathbuf, strlen(path), sizeonly);
+	size += sendDir(pathbuf, strlen(path), sizeonly, NIL);
 
 	return size;
 }
@@ -788,9 +822,12 @@ sendTablespace(char *path, bool sizeonly)
  * Include all files from the given directory in the output tar stream. If
  * 'sizeonly' is true, we just calculate a total length and return it, without
  * actually sending anything.
+ *
+ * Omit any directory in the tablespaces list, to avoid backing up
+ * tablespaces twice when they were created inside PGDATA.
  */
 static int64
-sendDir(char *path, int basepathlen, bool sizeonly)
+sendDir(char *path, int basepathlen, bool sizeonly, List *tablespaces)
 {
 	DIR		   *dir;
 	struct dirent *de;
@@ -811,12 +848,22 @@ sendDir(char *path, int basepathlen, bool sizeonly)
 					strlen(PG_TEMP_FILE_PREFIX)) == 0)
 			continue;
 
+		/* skip auto conf temporary file */
+		if (strncmp(de->d_name,
+					PG_AUTOCONF_FILENAME ".tmp",
+					sizeof(PG_AUTOCONF_FILENAME) + 4) == 0)
+			continue;
+
 		/*
 		 * If there's a backup_label file, it belongs to a backup started by
 		 * the user with pg_start_backup(). It is *not* correct for this
 		 * backup, our backup_label is injected into the tar separately.
 		 */
 		if (strcmp(de->d_name, BACKUP_LABEL_FILE) == 0)
+			continue;
+
+		/* Skip pg_replslot, not useful to copy */
+		if (strcmp(de->d_name, "pg_replslot") == 0)
 			continue;
 
 		/*
@@ -856,6 +903,20 @@ sendDir(char *path, int basepathlen, bool sizeonly)
 								pathbuf)));
 
 			/* If the file went away while scanning, it's no error. */
+			continue;
+		}
+
+		/*
+		 * Skip temporary statistics files. PG_STAT_TMP_DIR must be skipped
+		 * even when stats_temp_directory is set because PGSS_TEXT_FILE is
+		 * always created there.
+		 */
+		if ((statrelpath != NULL && strcmp(pathbuf, statrelpath) == 0) ||
+			strncmp(de->d_name, PG_STAT_TMP_DIR, strlen(PG_STAT_TMP_DIR)) == 0)
+		{
+			if (!sizeonly)
+				_tarWriteHeader(pathbuf + basepathlen + 1, NULL, &statbuf);
+			size += 512;
 			continue;
 		}
 
@@ -924,6 +985,9 @@ sendDir(char *path, int basepathlen, bool sizeonly)
 		}
 		else if (S_ISDIR(statbuf.st_mode))
 		{
+			bool		skip_this_dir = false;
+			ListCell   *lc;
+
 			/*
 			 * Store a directory entry in the tar file so we can get the
 			 * permissions right.
@@ -932,8 +996,29 @@ sendDir(char *path, int basepathlen, bool sizeonly)
 				_tarWriteHeader(pathbuf + basepathlen + 1, NULL, &statbuf);
 			size += 512;		/* Size of the header just added */
 
-			/* call ourselves recursively for a directory */
-			size += sendDir(pathbuf, basepathlen, sizeonly);
+			/*
+			 * Call ourselves recursively for a directory, unless it happens
+			 * to be a separate tablespace located within PGDATA.
+			 */
+			foreach(lc, tablespaces)
+			{
+				tablespaceinfo *ti = (tablespaceinfo *) lfirst(lc);
+
+				/*
+				 * ti->rpath is the tablespace relative path within PGDATA, or
+				 * NULL if the tablespace has been properly located somewhere
+				 * else.
+				 *
+				 * Skip past the leading "./" in pathbuf when comparing.
+				 */
+				if (ti->rpath && strcmp(ti->rpath, pathbuf + 2) == 0)
+				{
+					skip_this_dir = true;
+					break;
+				}
+			}
+			if (!skip_this_dir)
+				size += sendDir(pathbuf, basepathlen, sizeonly, tablespaces);
 		}
 		else if (S_ISREG(statbuf.st_mode))
 		{

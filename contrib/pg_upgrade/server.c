@@ -3,7 +3,7 @@
  *
  *	database server functions
  *
- *	Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ *	Copyright (c) 2010-2014, PostgreSQL Global Development Group
  *	contrib/pg_upgrade/server.c
  */
 
@@ -327,7 +327,7 @@ check_pghost_envvar(void)
 
 	if (!start)
 		pg_fatal("out of memory\n");
-		
+
 	for (option = start; option->keyword != NULL; option++)
 	{
 		if (option->envvar && (strcmp(option->envvar, "PGHOST") == 0 ||

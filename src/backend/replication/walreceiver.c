@@ -33,7 +33,7 @@
  * specific parts are in the libpqwalreceiver module. It's loaded
  * dynamically to avoid linking the server with libpq.
  *
- * Portions Copyright (c) 2010-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 2010-2014, PostgreSQL Global Development Group
  *
  *
  * IDENTIFICATION
@@ -187,6 +187,7 @@ void
 WalReceiverMain(void)
 {
 	char		conninfo[MAXCONNINFO];
+	char		slotname[NAMEDATALEN];
 	XLogRecPtr	startpoint;
 	TimeLineID	startpointTLI;
 	TimeLineID	primaryTLI;
@@ -241,6 +242,7 @@ WalReceiverMain(void)
 
 	/* Fetch information required to start streaming */
 	strlcpy(conninfo, (char *) walrcv->conninfo, MAXCONNINFO);
+	strlcpy(slotname, (char *) walrcv->slotname, NAMEDATALEN);
 	startpoint = walrcv->receiveStart;
 	startpointTLI = walrcv->receiveStartTLI;
 
@@ -355,7 +357,8 @@ WalReceiverMain(void)
 		 * on the new timeline.
 		 */
 		ThisTimeLineID = startpointTLI;
-		if (walrcv_startstreaming(startpointTLI, startpoint))
+		if (walrcv_startstreaming(startpointTLI, startpoint,
+								  slotname[0] != '\0' ? slotname : NULL))
 		{
 			bool		endofwal = false;
 
@@ -737,7 +740,11 @@ WalRcvSigHupHandler(SIGNAL_ARGS)
 static void
 WalRcvSigUsr1Handler(SIGNAL_ARGS)
 {
+	int			save_errno = errno;
+
 	latch_sigusr1_handler();
+
+	errno = save_errno;
 }
 
 /* SIGTERM: set flag for main loop, or shutdown immediately if safe */
@@ -1007,7 +1014,10 @@ XLogWalRcvFlush(bool dying)
 
 		/* Also let the master know that we made some progress */
 		if (!dying)
+		{
 			XLogWalRcvSendReply(false, false);
+			XLogWalRcvSendHSFeedback(false);
+		}
 	}
 }
 
@@ -1152,7 +1162,7 @@ XLogWalRcvSendHSFeedback(bool immed)
 	elog(DEBUG2, "sending hot standby feedback xmin %u epoch %u",
 		 xmin, nextEpoch);
 
-	/* Construct the the message and send it. */
+	/* Construct the message and send it. */
 	resetStringInfo(&reply_message);
 	pq_sendbyte(&reply_message, 'h');
 	pq_sendint64(&reply_message, GetCurrentIntegerTimestamp());
