@@ -158,6 +158,19 @@ SET ENABLE_SEQSCAN TO OFF;
      require superuser permission to change via <command>SET</command> or
      <command>ALTER</>.
     </para>
+
+    <para>
+     Another way to change configuration parameters persistently is by
+     use of <xref linkend="SQL-ALTERSYSTEM">
+     command, for example:
+<screen>
+ALTER SYSTEM SET checkpoint_timeout TO 600;
+</screen>
+     This command will allow users to change values persistently
+     through SQL command. The values will be effective after reload of server configuration
+     (<acronym>SIGHUP</>) or server startup. The effect of this command is similar to when
+     user manually changes values in <filename>postgresql.conf</filename>.
+    </para>
    </sect2>
 
    <sect2 id="config-setting-examining">
@@ -235,7 +248,7 @@ include 'filename'
         names that start with the <literal>.</literal> character are also excluded,
         to prevent mistakes as they are hidden on some platforms.  Multiple files
         within an include directory are processed in file name order. The file names
-        are ordered by C locale rules, ie. numbers before letters, and uppercase
+        are ordered by C locale rules, i.e. numbers before letters, and uppercase
         letters before lowercase ones.
      </para>
 
@@ -886,6 +899,45 @@ include 'filename'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-ssl-prefer-server-ciphers" xreflabel="ssl_prefer_server_ciphers">
+      <term><varname>ssl_prefer_server_ciphers</varname> (<type>bool</type>)</term>
+      <indexterm>
+       <primary><varname>ssl_prefer_server_ciphers</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Specifies whether to use the server's SSL cipher preferences, rather
+        than the client's.  The default is true.
+       </para>
+
+       <para>
+        Older PostgreSQL versions do not have this setting and always use the
+        client's preferences.  This setting is mainly for backward
+        compatibility with those versions.  Using the server's preferences is
+        usually better because it is more likely that the server is appropriately
+        configured.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-ssl-ecdh-curve" xreflabel="ssl_ecdh_curve">
+      <term><varname>ssl_ecdh_curve</varname> (<type>string</type>)</term>
+      <indexterm>
+       <primary><varname>ssl_ecdh_curve</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Specifies the name of the curve to use in ECDH key exchanges.  The
+        default is <literal>prime256p1</>.
+       </para>
+
+       <para>
+        The list of available curves can be shown with the command
+        <literal>openssl ecparam -list_curves</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-password-encryption" xreflabel="password_encryption">
       <term><varname>password_encryption</varname> (<type>boolean</type>)</term>
       <indexterm>
@@ -912,7 +964,7 @@ include 'filename'
       <listitem>
        <para>
         Sets the location of the Kerberos server key file. See
-        <xref linkend="kerberos-auth"> or <xref linkend="gssapi-auth">
+        <xref linkend="gssapi-auth">
         for details. This parameter can only be set in the
         <filename>postgresql.conf</> file or on the server command line.
        </para>
@@ -926,7 +978,7 @@ include 'filename'
       </indexterm>
       <listitem>
        <para>
-        Sets the Kerberos service name. See <xref linkend="kerberos-auth">
+        Sets the Kerberos service name. See <xref linkend="gssapi-auth">
         for details. This parameter can only be set in the
         <filename>postgresql.conf</> file or on the server command line.
        </para>
@@ -940,7 +992,7 @@ include 'filename'
       </indexterm>
       <listitem>
        <para>
-        Sets whether Kerberos and GSSAPI user names should be treated
+        Sets whether GSSAPI user names should be treated
         case-insensitively.
         The default is <literal>off</> (case sensitive). This parameter can only be
         set in the <filename>postgresql.conf</> file or on the server command line.
@@ -1055,6 +1107,43 @@ include 'filename'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-huge-tlb-pages" xreflabel="huge_tlb_pages">
+      <term><varname>huge_tlb_pages</varname> (<type>enum</type>)</term>
+      <indexterm>
+       <primary><varname>huge_tlb_pages</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Enables/disables the use of huge TLB pages. Valid values are
+        <literal>try</literal> (the default), <literal>on</literal>,
+        and <literal>off</literal>.
+       </para>
+
+       <para>
+        At present, this feature is supported only on Linux. The setting
+        is ignored on other systems.
+       </para>
+
+       <para>
+        The use of huge TLB pages results in smaller page tables and
+        less CPU time spent on memory management, increasing performance. For
+        more details, see
+        <ulink url="https://wiki.debian.org/Hugepages">the Debian wiki</ulink>.
+        Remember that you will need at least shared_buffers / huge page size +
+        1 huge TLB pages. So for example for a system with 6GB shared buffers
+        and a hugepage size of 2kb of you will need at least 3156 huge pages.
+       </para>
+
+       <para>
+        With <varname>huge_tlb_pages</varname> set to <literal>try</literal>,
+        the server will try to use huge pages, but fall back to using
+        normal allocation if that fails. With <literal>on</literal>, failure
+        to use huge pages will prevent the server from starting up. With
+        <literal>off</literal>, huge pages will not be used.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-temp-buffers" xreflabel="temp_buffers">
       <term><varname>temp_buffers</varname> (<type>integer</type>)</term>
       <indexterm>
@@ -1159,8 +1248,26 @@ include 'filename'
        </para>
        <para>
         Note that when autovacuum runs, up to
-        <xref linkend="guc-autovacuum-max-workers"> times this memory may be
-        allocated, so be careful not to set the default value too high.
+        <xref linkend="guc-autovacuum-max-workers"> times this memory
+        may be allocated, so be careful not to set the default value
+        too high.  It may be useful to control for this by separately
+        setting <xref linkend="guc-autovacuum-work-mem">.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-autovacuum-work-mem" xreflabel="autovacuum_work_mem">
+      <term><varname>autovacuum_work_mem</varname> (<type>integer</type>)</term>
+      <indexterm>
+       <primary><varname>autovacuum_work_mem</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        Specifies the maximum amount of memory to be used by each
+        autovacuum worker process.  It defaults to -1, indicating that
+        the value of <xref linkend="guc-maintenance-work-mem"> should
+        be used instead.  The setting has no effect on the behavior of
+        <command>VACUUM</command> when run in other contexts.
        </para>
       </listitem>
      </varlistentry>
@@ -1609,10 +1716,12 @@ include 'filename'
         <varname>wal_level</> determines how much information is written
         to the WAL. The default value is <literal>minimal</>, which writes
         only the information needed to recover from a crash or immediate
-        shutdown. <literal>archive</> adds logging required for WAL archiving,
-        and <literal>hot_standby</> further adds information required to run
-        read-only queries on a standby server.
-        This parameter can only be set at server start.
+        shutdown. <literal>archive</> adds logging required for WAL archiving;
+        <literal>hot_standby</> further adds information required to run
+        read-only queries on a standby server; and, finally
+        <literal>logical</> adds information necessary to support logical
+        decoding.  Each level includes the information logged at all lower
+        levels.  This parameter can only be set at server start.
        </para>
        <para>
         In <literal>minimal</> level, WAL-logging of some bulk
@@ -1626,24 +1735,30 @@ include 'filename'
          <member><command>COPY</> into tables that were created or truncated in the same
          transaction</member>
         </simplelist>
-        But minimal WAL does not contain
-        enough information to reconstruct the data from a base backup and the
-        WAL logs, so either <literal>archive</> or <literal>hot_standby</>
-        level must be used to enable
-        WAL archiving (<xref linkend="guc-archive-mode">) and streaming
-        replication.
+        But minimal WAL does not contain enough information to reconstruct the
+        data from a base backup and the WAL logs, so <literal>archive</> or
+        higher must be used to enable WAL archiving
+        (<xref linkend="guc-archive-mode">) and streaming replication.
        </para>
        <para>
         In <literal>hot_standby</> level, the same information is logged as
         with <literal>archive</>, plus information needed to reconstruct
         the status of running transactions from the WAL. To enable read-only
         queries on a standby server, <varname>wal_level</> must be set to
-        <literal>hot_standby</> on the primary, and
+        <literal>hot_standby</> or higher on the primary, and
         <xref linkend="guc-hot-standby"> must be enabled in the standby. It is
-        thought that there is
-        little measurable difference in performance between using
-        <literal>hot_standby</> and <literal>archive</> levels, so feedback
-        is welcome if any production impacts are noticeable.
+        thought that there is little measurable difference in performance
+        between using <literal>hot_standby</> and <literal>archive</> levels,
+        so feedback is welcome if any production impacts are noticeable.
+       </para>
+       <para>
+        In <literal>logical</> level, the same information is logged as
+        with <literal>hot_standby</>, plus information needed to allow
+        extracting logical changesets from the WAL. Using a level of
+        <literal>logical</> will increase the WAL volume, particularly if many
+        tables are configured for <literal>REPLICA IDENTITY FULL</literal> and
+        many <command>UPDATE</> and <command>DELETE</> statements are
+        executed.
        </para>
       </listitem>
      </varlistentry>
@@ -1875,6 +1990,32 @@ include 'filename'
         This parameter can only be set in the <filename>postgresql.conf</>
         file or on the server command line.
         The default is <literal>on</>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="guc-wal-log-hints" xreflabel="wal_log_hints">
+      <term><varname>wal_log_hints</varname> (<type>boolean</type>)</term>
+      <indexterm>
+       <primary><varname>wal_log_hints</> configuration parameter</primary>
+      </indexterm>
+      <listitem>
+       <para>
+        When this parameter is <literal>on</>, the <productname>PostgreSQL</>
+        server writes the entire content of each disk page to WAL during the
+        first modification of that page after a checkpoint, even for
+        non-critical modifications of so-called hint bits.
+       </para>
+
+       <para>
+        If data checksums are enabled, hint bit updates are always WAL-logged
+        and this setting is ignored. You can use this setting to test how much
+        extra WAL-logging would occur if your database had data checksums
+        enabled.
+       </para>
+
+       <para>
+        This parameter can only be set at server start. The default value is <literal>off</>.
        </para>
       </listitem>
      </varlistentry>
@@ -2200,10 +2341,29 @@ include 'filename'
         disabled. WAL sender processes count towards the total number
         of connections, so the parameter cannot be set higher than
         <xref linkend="guc-max-connections">.  This parameter can only
-        be set at server start. <varname>wal_level</> must be set
-        to <literal>archive</> or <literal>hot_standby</> to allow
-        connections from standby servers.
+        be set at server start. <varname>wal_level</> must be set to
+        <literal>archive</> or higher to allow connections from standby
+        servers.
        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="guc-max-replication-slots" xreflabel="max_replication_slots">
+       <term><varname>max_replication_slots</varname> (<type>integer</type>)</term>
+       <indexterm>
+        <primary><varname>max_replication_slots</> configuration parameter</primary>
+       </indexterm>
+       <listitem>
+        <para>
+         Specifies the maximum number of replication slots
+         (see <xref linkend="streaming-replication-slots"> that the server
+         can support. The default is zero.  This parameter can only be set at
+         server start.
+         <varname>wal_level</varname> must be set
+         to <literal>archive</literal> or higher to allow replication slots to
+         be used. Setting it to a lower value than the number of currently
+         existing replication slots will prevent the server from starting.
+        </para>
        </listitem>
       </varlistentry>
 
@@ -2870,17 +3030,9 @@ include 'filename'
       <listitem>
        <para>
         Sets the planner's assumption about the effective size of the
-        disk cache that is available to a single query.  The default
-        setting of -1 selects a size equal to four times the size of <xref
-        linkend="guc-shared-buffers">, but not less than the size of one
-        shared buffer page, typically <literal>8kB</literal>.  This value
-        can be set manually if the automatic choice is too large or too
-        small.
-       </para>
-
-       <para>
-        This value is factored into estimates of the cost of using an index;
-        a higher value makes it more likely index scans will be used, a
+        disk cache that is available to a single query.  This is
+        factored into estimates of the cost of using an index; a
+        higher value makes it more likely index scans will be used, a
         lower value makes it more likely sequential scans will be
         used. When setting this parameter you should consider both
         <productname>PostgreSQL</productname>'s shared buffers and the
@@ -2892,10 +3044,16 @@ include 'filename'
         memory allocated by <productname>PostgreSQL</productname>, nor
         does it reserve kernel disk cache; it is used only for estimation
         purposes.  The system also does not assume data remains in
-        the disk cache between queries.  The auto-tuning
-        selected by the default setting of -1 should give reasonable
-        results if this database cluster can utilize most of the memory
-        on this server.
+        the disk cache between queries.
+       </para>
+
+       <para>
+        If <varname>effective_cache_size</> is set to -1, which is the
+        default, the value is replaced by an automatically selected value,
+        currently four times the size of <xref linkend="guc-shared-buffers">.
+        For recommended settings of <varname>shared_buffers</>, this should
+        give reasonable results if this database cluster can use most of the
+        memory on the server.
        </para>
       </listitem>
      </varlistentry>
@@ -5160,8 +5318,8 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       <listitem>
        <para>
         Specifies the cutoff age (in transactions) that <command>VACUUM</>
-        should use to decide whether to replace transaction IDs with
-        <literal>FrozenXID</> while scanning a table.
+        should use to decide whether to freeze row versions
+        while scanning a table.
         The default is 50 million transactions.  Although
         users can set this value anywhere from zero to one billion,
         <command>VACUUM</> will silently limit the effective value to half

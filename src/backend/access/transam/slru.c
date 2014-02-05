@@ -38,7 +38,7 @@
  * by re-setting the page's page_dirty flag.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/backend/access/transam/slru.c
@@ -151,7 +151,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 	sz += MAXALIGN(nslots * sizeof(bool));		/* page_dirty[] */
 	sz += MAXALIGN(nslots * sizeof(int));		/* page_number[] */
 	sz += MAXALIGN(nslots * sizeof(int));		/* page_lru_count[] */
-	sz += MAXALIGN(nslots * sizeof(LWLockId));	/* buffer_locks[] */
+	sz += MAXALIGN(nslots * sizeof(LWLock *));	/* buffer_locks[] */
 
 	if (nlsns > 0)
 		sz += MAXALIGN(nslots * nlsns * sizeof(XLogRecPtr));	/* group_lsn[] */
@@ -161,7 +161,7 @@ SimpleLruShmemSize(int nslots, int nlsns)
 
 void
 SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
-			  LWLockId ctllock, const char *subdir)
+			  LWLock *ctllock, const char *subdir)
 {
 	SlruShared	shared;
 	bool		found;
@@ -202,8 +202,8 @@ SimpleLruInit(SlruCtl ctl, const char *name, int nslots, int nlsns,
 		offset += MAXALIGN(nslots * sizeof(int));
 		shared->page_lru_count = (int *) (ptr + offset);
 		offset += MAXALIGN(nslots * sizeof(int));
-		shared->buffer_locks = (LWLockId *) (ptr + offset);
-		offset += MAXALIGN(nslots * sizeof(LWLockId));
+		shared->buffer_locks = (LWLock **) (ptr + offset);
+		offset += MAXALIGN(nslots * sizeof(LWLock *));
 
 		if (nlsns > 0)
 		{
@@ -1210,6 +1210,17 @@ restart:;
 	(void) SlruScanDirectory(ctl, SlruScanDirCbDeleteCutoff, &cutoffPage);
 }
 
+void
+SlruDeleteSegment(SlruCtl ctl, char *filename)
+{
+	char		path[MAXPGPATH];
+
+	snprintf(path, MAXPGPATH, "%s/%s", ctl->Dir, filename);
+	ereport(DEBUG2,
+			(errmsg("removing file \"%s\"", path)));
+	unlink(path);
+}
+
 /*
  * SlruScanDirectory callback
  *		This callback reports true if there's any segment prior to the one
@@ -1235,16 +1246,10 @@ SlruScanDirCbReportPresence(SlruCtl ctl, char *filename, int segpage, void *data
 static bool
 SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename, int segpage, void *data)
 {
-	char		path[MAXPGPATH];
 	int			cutoffPage = *(int *) data;
 
 	if (ctl->PagePrecedes(segpage, cutoffPage))
-	{
-		snprintf(path, MAXPGPATH, "%s/%s", ctl->Dir, filename);
-		ereport(DEBUG2,
-				(errmsg("removing file \"%s\"", path)));
-		unlink(path);
-	}
+		SlruDeleteSegment(ctl, filename);
 
 	return false;				/* keep going */
 }
@@ -1256,12 +1261,7 @@ SlruScanDirCbDeleteCutoff(SlruCtl ctl, char *filename, int segpage, void *data)
 bool
 SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage, void *data)
 {
-	char		path[MAXPGPATH];
-
-	snprintf(path, MAXPGPATH, "%s/%s", ctl->Dir, filename);
-	ereport(DEBUG2,
-			(errmsg("removing file \"%s\"", path)));
-	unlink(path);
+	SlruDeleteSegment(ctl, filename);
 
 	return false;				/* keep going */
 }
@@ -1271,6 +1271,11 @@ SlruScanDirCbDeleteAll(SlruCtl ctl, char *filename, int segpage, void *data)
  *
  * If the callback returns true, the scan is stopped.  The last return value
  * from the callback is returned.
+ *
+ * The callback receives the following arguments: 1. the SlruCtl struct for the
+ * slru being truncated; 2. the filename being considered; 3. the page number
+ * for the first page of that file; 4. a pointer to the opaque data given to us
+ * by the caller.
  *
  * Note that the ordering in which the directory is scanned is not guaranteed.
  *
@@ -1288,8 +1293,12 @@ SlruScanDirectory(SlruCtl ctl, SlruScanCallback callback, void *data)
 	cldir = AllocateDir(ctl->Dir);
 	while ((clde = ReadDir(cldir, ctl->Dir)) != NULL)
 	{
-		if (strlen(clde->d_name) == 4 &&
-			strspn(clde->d_name, "0123456789ABCDEF") == 4)
+		size_t	len;
+
+		len = strlen(clde->d_name);
+
+		if ((len == 4 || len == 5) &&
+			strspn(clde->d_name, "0123456789ABCDEF") == len)
 		{
 			segno = (int) strtol(clde->d_name, NULL, 16);
 			segpage = segno * SLRU_PAGES_PER_SEGMENT;

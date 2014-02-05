@@ -9,7 +9,7 @@
  * context's MemoryContextMethods struct.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -72,7 +72,8 @@ static void MemoryContextStatsInternal(MemoryContext context, int level);
  * In normal multi-backend operation, this is called once during
  * postmaster startup, and not at all by individual backend startup
  * (since the backends inherit an already-initialized context subsystem
- * by virtue of being forked off the postmaster).
+ * by virtue of being forked off the postmaster).  But in an EXEC_BACKEND
+ * build, each process must do this for itself.
  *
  * In a standalone backend this must be called during backend startup.
  */
@@ -106,6 +107,9 @@ MemoryContextInit(void)
 	 * where retained memory in a context is *essential* --- we want to be
 	 * sure ErrorContext still has some memory even if we've run out
 	 * elsewhere!
+	 *
+	 * This should be the last step in this function, as elog.c assumes memory
+	 * management works once ErrorContext is non-null.
 	 */
 	ErrorContext = AllocSetContextCreate(TopMemoryContext,
 										 "ErrorContext",
@@ -573,8 +577,7 @@ MemoryContextAlloc(MemoryContext context, Size size)
 	AssertArg(MemoryContextIsValid(context));
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	context->isReset = false;
 
@@ -599,8 +602,7 @@ MemoryContextAllocZero(MemoryContext context, Size size)
 	AssertArg(MemoryContextIsValid(context));
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	context->isReset = false;
 
@@ -627,8 +629,7 @@ MemoryContextAllocZeroAligned(MemoryContext context, Size size)
 	AssertArg(MemoryContextIsValid(context));
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	context->isReset = false;
 
@@ -649,8 +650,7 @@ palloc(Size size)
 	AssertArg(MemoryContextIsValid(CurrentMemoryContext));
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	CurrentMemoryContext->isReset = false;
 
@@ -669,8 +669,7 @@ palloc0(Size size)
 	AssertArg(MemoryContextIsValid(CurrentMemoryContext));
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	CurrentMemoryContext->isReset = false;
 
@@ -722,8 +721,7 @@ repalloc(void *pointer, Size size)
 	void	   *ret;
 
 	if (!AllocSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	/*
 	 * Try to detect bogus pointers handed to us, poorly though we can.
@@ -764,8 +762,7 @@ MemoryContextAllocHuge(MemoryContext context, Size size)
 	AssertArg(MemoryContextIsValid(context));
 
 	if (!AllocHugeSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	context->isReset = false;
 
@@ -787,8 +784,7 @@ repalloc_huge(void *pointer, Size size)
 	void	   *ret;
 
 	if (!AllocHugeSizeIsValid(size))
-		elog(ERROR, "invalid memory alloc request size %lu",
-			 (unsigned long) size);
+		elog(ERROR, "invalid memory alloc request size %zu", size);
 
 	/*
 	 * Try to detect bogus pointers handed to us, poorly though we can.

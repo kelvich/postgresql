@@ -3,7 +3,7 @@
  * json.h
  *	  Declarations for JSON data type support.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/utils/json.h
@@ -31,6 +31,17 @@ extern Datum to_json(PG_FUNCTION_ARGS);
 extern Datum json_agg_transfn(PG_FUNCTION_ARGS);
 extern Datum json_agg_finalfn(PG_FUNCTION_ARGS);
 
+extern Datum json_object_agg_finalfn(PG_FUNCTION_ARGS);
+extern Datum json_object_agg_transfn(PG_FUNCTION_ARGS);
+
+extern Datum json_build_object(PG_FUNCTION_ARGS);
+extern Datum json_build_object_noargs(PG_FUNCTION_ARGS);
+extern Datum json_build_array(PG_FUNCTION_ARGS);
+extern Datum json_build_array_noargs(PG_FUNCTION_ARGS);
+
+extern Datum json_object(PG_FUNCTION_ARGS);
+extern Datum json_object_two_arg(PG_FUNCTION_ARGS);
+
 extern void escape_json(StringInfo buf, const char *str);
 
 extern Datum json_typeof(PG_FUNCTION_ARGS);
@@ -47,7 +58,10 @@ extern Datum json_array_length(PG_FUNCTION_ARGS);
 extern Datum json_each(PG_FUNCTION_ARGS);
 extern Datum json_each_text(PG_FUNCTION_ARGS);
 extern Datum json_array_elements(PG_FUNCTION_ARGS);
+extern Datum json_array_elements_text(PG_FUNCTION_ARGS);
 extern Datum json_populate_record(PG_FUNCTION_ARGS);
 extern Datum json_populate_recordset(PG_FUNCTION_ARGS);
+extern Datum json_to_record(PG_FUNCTION_ARGS);
+extern Datum json_to_recordset(PG_FUNCTION_ARGS);
 
 #endif   /* JSON_H */

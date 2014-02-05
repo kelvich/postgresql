@@ -4,7 +4,7 @@
  *	  definition of the system "procedure" relation (pg_proc)
  *	  along with the relation's initial contents.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * src/include/catalog/pg_proc.h
@@ -840,6 +840,8 @@ DATA(insert OID = 2092 (  array_upper	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 
 DESCR("array upper dimension");
 DATA(insert OID = 2176 (  array_length	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 23 "2277 23" _null_ _null_ _null_ _null_ array_length _null_ _null_ _null_ ));
 DESCR("array length");
+DATA(insert OID = 3179 (  cardinality	   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 23 "2277" _null_ _null_ _null_ _null_ array_cardinality _null_ _null_ _null_ ));
+DESCR("array cardinality");
 DATA(insert OID = 378 (  array_append	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2277 "2277 2283" _null_ _null_ _null_ _null_ array_push _null_ _null_ _null_ ));
 DESCR("append element onto end of array");
 DATA(insert OID = 379 (  array_prepend	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2277 "2283 2277" _null_ _null_ _null_ _null_ array_push _null_ _null_ _null_ ));
@@ -2700,6 +2702,8 @@ DATA(insert OID = 2844 (  pg_stat_get_db_blk_read_time	PGNSP PGUID 12 1 0 0 0 f 
 DESCR("statistics: block read time, in msec");
 DATA(insert OID = 2845 (  pg_stat_get_db_blk_write_time PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 701 "26" _null_ _null_ _null_ _null_ pg_stat_get_db_blk_write_time _null_ _null_ _null_ ));
 DESCR("statistics: block write time, in msec");
+DATA(insert OID = 3195 (  pg_stat_get_archiver		PGNSP PGUID 12 1 0 0 0 f f f f f f s 0 0 2249 "" "{20,25,1184,20,25,1184,1184}" "{o,o,o,o,o,o,o}" "{archived_count,last_archived_wal,last_archived_time,failed_count,last_failed_wal,last_failed_time,stats_reset}" _null_ pg_stat_get_archiver _null_ _null_ _null_ ));
+DESCR("statistics: information about WAL archiver");
 DATA(insert OID = 2769 ( pg_stat_get_bgwriter_timed_checkpoints PGNSP PGUID 12 1 0 0 0 f f f f t f s 0 0 20 "" _null_ _null_ _null_ _null_ pg_stat_get_bgwriter_timed_checkpoints _null_ _null_ _null_ ));
 DESCR("statistics: number of timed checkpoints started by the bgwriter");
 DATA(insert OID = 2770 ( pg_stat_get_bgwriter_requested_checkpoints PGNSP PGUID 12 1 0 0 0 f f f f t f s 0 0 20 "" _null_ _null_ _null_ _null_ pg_stat_get_bgwriter_requested_checkpoints _null_ _null_ _null_ ));
@@ -3030,6 +3034,10 @@ DATA(insert OID = 2625 ( pg_ls_dir			PGNSP PGUID 12 1 1000 0 0 f f f f t t v 1 0
 DESCR("list all files in a directory");
 DATA(insert OID = 2626 ( pg_sleep			PGNSP PGUID 12 1 0 0 0 f f f f t f v 1 0 2278 "701" _null_ _null_ _null_ _null_ pg_sleep _null_ _null_ _null_ ));
 DESCR("sleep for the specified time in seconds");
+DATA(insert OID = 3935 ( pg_sleep_for			PGNSP PGUID 14 1 0 0 0 f f f f t f v 1 0 2278 "1186" _null_ _null_ _null_ _null_ "select pg_catalog.pg_sleep(extract(epoch from pg_catalog.clock_timestamp() operator(pg_catalog.+) $1) operator(pg_catalog.-) extract(epoch from pg_catalog.clock_timestamp()))" _null_ _null_ _null_ ));
+DESCR("sleep for the specified interval");
+DATA(insert OID = 3936 ( pg_sleep_until			PGNSP PGUID 14 1 0 0 0 f f f f t f v 1 0 2278 "1184" _null_ _null_ _null_ _null_ "select pg_catalog.pg_sleep(extract(epoch from $1) operator(pg_catalog.-) extract(epoch from pg_catalog.clock_timestamp()))" _null_ _null_ _null_ ));
+DESCR("sleep until the specified time");
 
 DATA(insert OID = 2971 (  text				PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "16" _null_ _null_ _null_ _null_ booltext _null_ _null_ _null_ ));
 DESCR("convert boolean to text");
@@ -4130,25 +4138,37 @@ DATA(insert OID = 3174 (  json_agg_finalfn	 PGNSP PGUID 12 1 0 0 0 f f f f f f i
 DESCR("json aggregate final function");
 DATA(insert OID = 3175 (  json_agg		   PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 114 "2283" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
 DESCR("aggregate input into json");
+DATA(insert OID = 3180 (  json_object_agg_transfn	 PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 2281 "2281 2276 2276" _null_ _null_ _null_ _null_ json_object_agg_transfn _null_ _null_ _null_ ));
+DESCR("json object aggregate transition function");
+DATA(insert OID = 3196 (  json_object_agg_finalfn	 PGNSP PGUID 12 1 0 0 0 f f f f f f i 1 0 114 "2281" _null_ _null_ _null_ _null_ json_object_agg_finalfn _null_ _null_ _null_ ));
+DESCR("json object aggregate final function");
+DATA(insert OID = 3197 (  json_object_agg		   PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 114 "2276 2276" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("aggregate input into a json object");
+DATA(insert OID = 3198 (  json_build_array	   PGNSP PGUID 12 1 0 2276 0 f f f f f f i 1 0 114 "2276" "{2276}" "{v}" _null_ _null_ json_build_array _null_ _null_ _null_ ));
+DESCR("build a json array from any inputs");
+DATA(insert OID = 3199 (  json_build_array	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 0 0 114  "" _null_ _null_ _null_ _null_ json_build_array_noargs _null_ _null_ _null_ ));
+DESCR("build an empty json array");
+DATA(insert OID = 3200 (  json_build_object	   PGNSP PGUID 12 1 0 2276 0 f f f f f f i 1 0 114 "2276" "{2276}" "{v}" _null_ _null_ json_build_object _null_ _null_ _null_ ));
+DESCR("build a json object from pairwise key/value inputs");
+DATA(insert OID = 3201 (  json_build_object	   PGNSP PGUID 12 1 0 0 0 f f f f f f i 0 0 114  "" _null_ _null_ _null_ _null_ json_build_object_noargs _null_ _null_ _null_ ));
+DESCR("build an empty json object");
+DATA(insert OID = 3202 (  json_object    PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 114 "1009" _null_ _null_ _null_ _null_ json_object _null_ _null_ _null_ ));
+DESCR("map text arrayof key value pais to json object");
+DATA(insert OID = 3203 (  json_object    PGNSP PGUID 12 1 0 0 0 f f f f t f s 2 0 114 "1009 1009" _null_ _null_ _null_ _null_ json_object_two_arg _null_ _null_ _null_ ));
+DESCR("map text arrayof key value pais to json object");
 DATA(insert OID = 3176 (  to_json	   PGNSP PGUID 12 1 0 0 0 f f f f t f s 1 0 114 "2283" _null_ _null_ _null_ _null_ to_json _null_ _null_ _null_ ));
 DESCR("map input to json");
 
 DATA(insert OID = 3947 (  json_object_field			PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 114 "114 25" _null_ _null_ "{from_json, field_name}" _null_ json_object_field _null_ _null_ _null_ ));
-DESCR("get json object field");
 DATA(insert OID = 3948 (  json_object_field_text	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 25  "114 25" _null_ _null_ "{from_json, field_name}" _null_ json_object_field_text _null_ _null_ _null_ ));
-DESCR("get json object field as text");
 DATA(insert OID = 3949 (  json_array_element		PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 114 "114 23" _null_ _null_ "{from_json, element_index}" _null_ json_array_element _null_ _null_ _null_ ));
-DESCR("get json array element");
 DATA(insert OID = 3950 (  json_array_element_text	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 25  "114 23" _null_ _null_ "{from_json, element_index}" _null_ json_array_element_text _null_ _null_ _null_ ));
-DESCR("get json array element as text");
 DATA(insert OID = 3951 (  json_extract_path			PGNSP PGUID 12 1 0 25 0 f f f f t f i 2 0 114 "114 1009" "{114,1009}" "{i,v}" "{from_json,path_elems}" _null_ json_extract_path _null_ _null_ _null_ ));
 DESCR("get value from json with path elements");
 DATA(insert OID = 3952 (  json_extract_path_op		PGNSP PGUID 12 1 0 0 0	f f f f t f i 2 0 114 "114 1009" _null_ _null_ "{from_json,path_elems}" _null_ json_extract_path _null_ _null_ _null_ ));
-DESCR("get value from json with path elements");
 DATA(insert OID = 3953 (  json_extract_path_text	PGNSP PGUID 12 1 0 25 0 f f f f t f i 2 0 25 "114 1009" "{114,1009}" "{i,v}" "{from_json,path_elems}" _null_ json_extract_path_text _null_ _null_ _null_ ));
 DESCR("get value from json as text with path elements");
 DATA(insert OID = 3954 (  json_extract_path_text_op PGNSP PGUID 12 1 0 0 0	f f f f t f i 2 0 25 "114 1009" _null_ _null_ "{from_json,path_elems}" _null_ json_extract_path_text _null_ _null_ _null_ ));
-DESCR("get value from json as text with path elements");
 DATA(insert OID = 3955 (  json_array_elements		PGNSP PGUID 12 1 100 0 0 f f f f t t i 1 0 114 "114" "{114,114}" "{i,o}" "{from_json,value}" _null_ json_array_elements _null_ _null_ _null_ ));
 DESCR("key value pairs of a json object");
 DATA(insert OID = 3956 (  json_array_length			PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 23 "114" _null_ _null_ _null_ _null_ json_array_length _null_ _null_ _null_ ));
@@ -4163,8 +4183,14 @@ DATA(insert OID = 3960 (  json_populate_record	   PGNSP PGUID 12 1 0 0 0 f f f f
 DESCR("get record fields from a json object");
 DATA(insert OID = 3961 (  json_populate_recordset  PGNSP PGUID 12 1 100 0 0 f f f f f t s 3 0 2283 "2283 114 16" _null_ _null_ _null_ _null_ json_populate_recordset _null_ _null_ _null_ ));
 DESCR("get set of records with fields from a json array of objects");
+DATA(insert OID = 3204 (  json_to_record	   PGNSP PGUID 12 1 0 0 0 f f f f f f s 2 0 2249 "114 16" _null_ _null_ _null_ _null_ json_to_record _null_ _null_ _null_ ));
+DESCR("get record fields from a json object");
+DATA(insert OID = 3205 (  json_to_recordset  PGNSP PGUID 12 1 100 0 0 f f f f f t s 2 0 2249 "114 16" _null_ _null_ _null_ _null_ json_to_recordset _null_ _null_ _null_ ));
+DESCR("get set of records with fields from a json array of objects");
 DATA(insert OID = 3968 (  json_typeof              PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 25 "114" _null_ _null_ _null_ _null_ json_typeof _null_ _null_ _null_ ));
 DESCR("get the type of a json value");
+DATA(insert OID = 3969 (  json_array_elements_text	PGNSP PGUID 12 1 100 0 0 f f f f t t i 1 0 25 "114" "{114,25}" "{i,o}" "{from_json,value}" _null_ json_array_elements_text _null_ _null_ _null_ ));
+DESCR("elements of json array");
 
 /* uuid */
 DATA(insert OID = 2952 (  uuid_in		   PGNSP PGUID 12 1 0 0 0 f f f f t f i 1 0 2950 "2275" _null_ _null_ _null_ _null_ uuid_in _null_ _null_ _null_ ));
@@ -4756,10 +4782,73 @@ DESCR("SP-GiST support for quad tree over range");
 DATA(insert OID = 3473 (  spg_range_quad_leaf_consistent	PGNSP PGUID 12 1 0 0 0 f f f f t f i 2 0 16 "2281 2281" _null_ _null_ _null_ _null_  spg_range_quad_leaf_consistent _null_ _null_ _null_ ));
 DESCR("SP-GiST support for quad tree over range");
 
+/* replication slots */
+DATA(insert OID = 3779 (  pg_create_physical_replication_slot PGNSP PGUID 12 1 0 0 0 f f f f f f v 1 0 2249 "19" "{19,25,25}" "{i,o,o}" "{slotname,slotname,xlog_position}" _null_ pg_create_physical_replication_slot _null_ _null_ _null_ ));
+DESCR("create a physical replication slot");
+DATA(insert OID = 3780 (  pg_drop_replication_slot PGNSP PGUID 12 1 0 0 0 f f f f f f v 1 0 2278 "19" _null_ _null_ _null_ _null_ pg_drop_replication_slot _null_ _null_ _null_ ));
+DESCR("drop a replication slot");
+DATA(insert OID = 3781 (  pg_get_replication_slots	PGNSP PGUID 12 1 10 0 0 f f f f f t s 0 0 2249 "" "{25,25,26,16,28,25}" "{o,o,o,o,o,o}" "{slot_name,slot_type,datoid,active,xmin,restart_lsn}" _null_ pg_get_replication_slots _null_ _null_ _null_ ));
+DESCR("information about replication slots currently in use");
 
 /* event triggers */
 DATA(insert OID = 3566 (  pg_event_trigger_dropped_objects		PGNSP PGUID 12 10 100 0 0 f f f f t t s 0 0 2249 "" "{26,26,23,25,25,25,25}" "{o,o,o,o,o,o,o}" "{classid, objid, objsubid, object_type, schema_name, object_name, object_identity}" _null_ pg_event_trigger_dropped_objects _null_ _null_ _null_ ));
 DESCR("list objects dropped by the current command");
+
+/* generic transition functions for ordered-set aggregates */
+DATA(insert OID = 3970 ( ordered_set_transition			PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2281 "2281 2276" _null_ _null_ _null_ _null_ ordered_set_transition _null_ _null_ _null_ ));
+DESCR("aggregate transition function");
+DATA(insert OID = 3971 ( ordered_set_transition_multi	PGNSP PGUID 12 1 0 2276 0 f f f f f f i 2 0 2281 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_ ordered_set_transition_multi _null_ _null_ _null_ ));
+DESCR("aggregate transition function");
+
+/* inverse distribution aggregates (and their support functions) */
+DATA(insert OID = 3972 ( percentile_disc		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 2283 "701 2283" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("discrete percentile");
+DATA(insert OID = 3973 ( percentile_disc_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 2283 "2281 701 2283" _null_ _null_ _null_ _null_ percentile_disc_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3974 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 701 "701 701" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("continuous distribution percentile");
+DATA(insert OID = 3975 ( percentile_cont_float8_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 701 "2281 701 701" _null_ _null_ _null_ _null_ percentile_cont_float8_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3976 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1186 "701 1186" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("continuous distribution percentile");
+DATA(insert OID = 3977 ( percentile_cont_interval_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1186 "2281 701 1186" _null_ _null_ _null_ _null_ percentile_cont_interval_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3978 ( percentile_disc		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 2277 "1022 2283" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("multiple discrete percentiles");
+DATA(insert OID = 3979 ( percentile_disc_multi_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 2277 "2281 1022 2283" _null_ _null_ _null_ _null_ percentile_disc_multi_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3980 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1022 "1022 701" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("multiple continuous percentiles");
+DATA(insert OID = 3981 ( percentile_cont_float8_multi_final PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1022 "2281 1022 701" _null_ _null_ _null_ _null_ percentile_cont_float8_multi_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3982 ( percentile_cont		PGNSP PGUID 12 1 0 0 0 t f f f f f i 2 0 1187 "1022 1186" _null_ _null_ _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("multiple continuous percentiles");
+DATA(insert OID = 3983 ( percentile_cont_interval_multi_final	PGNSP PGUID 12 1 0 0 0 f f f f f f i 3 0 1187 "2281 1022 1186" _null_ _null_ _null_ _null_ percentile_cont_interval_multi_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3984 ( mode					PGNSP PGUID 12 1 0 0 0 t f f f f f i 1 0 2283 "2283" _null_ _null_ _null_ _null_	aggregate_dummy _null_ _null_ _null_ ));
+DESCR("most common value");
+DATA(insert OID = 3985 ( mode_final				PGNSP PGUID 12 1 0 0 0 f f f f f f i 2 0 2283 "2281 2283" _null_ _null_ _null_ _null_	mode_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+
+/* hypothetical-set aggregates (and their support functions) */
+DATA(insert OID = 3986 ( rank				PGNSP PGUID 12 1 0 2276 0 t f f f f f i 1 0 20 "2276" "{2276}" "{v}" _null_ _null_	aggregate_dummy _null_ _null_ _null_ ));
+DESCR("rank of hypothetical row");
+DATA(insert OID = 3987 ( rank_final			PGNSP PGUID 12 1 0 2276 0 f f f f f f i 2 0 20 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_	hypothetical_rank_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3988 ( percent_rank		PGNSP PGUID 12 1 0 2276 0 t f f f f f i 1 0 701 "2276" "{2276}" "{v}" _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("fractional rank of hypothetical row");
+DATA(insert OID = 3989 ( percent_rank_final PGNSP PGUID 12 1 0 2276 0 f f f f f f i 2 0 701 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_ hypothetical_percent_rank_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3990 ( cume_dist			PGNSP PGUID 12 1 0 2276 0 t f f f f f i 1 0 701 "2276" "{2276}" "{v}" _null_ _null_ aggregate_dummy _null_ _null_ _null_ ));
+DESCR("cumulative distribution of hypothetical row");
+DATA(insert OID = 3991 ( cume_dist_final	PGNSP PGUID 12 1 0 2276 0 f f f f f f i 2 0 701 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_ hypothetical_cume_dist_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+DATA(insert OID = 3992 ( dense_rank			PGNSP PGUID 12 1 0 2276 0 t f f f f f i 1 0 20 "2276" "{2276}" "{v}" _null_ _null_	aggregate_dummy _null_ _null_ _null_ ));
+DESCR("rank of hypothetical row without gaps");
+DATA(insert OID = 3993 ( dense_rank_final	PGNSP PGUID 12 1 0 2276 0 f f f f f f i 2 0 20 "2281 2276" "{2281,2276}" "{i,v}" _null_ _null_	hypothetical_dense_rank_final _null_ _null_ _null_ ));
+DESCR("aggregate final function");
+
+
 /*
  * Symbolic values for provolatile column: these indicate whether the result
  * of a function is dependent *only* on the values of its explicit arguments,

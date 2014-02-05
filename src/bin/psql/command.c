@@ -1,7 +1,7 @@
 /*
  * psql - the PostgreSQL interactive terminal
  *
- * Copyright (c) 2000-2013, PostgreSQL Global Development Group
+ * Copyright (c) 2000-2014, PostgreSQL Global Development Group
  *
  * src/bin/psql/command.c
  */
@@ -264,11 +264,15 @@ exec_command(const char *cmd,
 		{
 #ifndef WIN32
 			struct passwd *pw;
+			uid_t		user_id = geteuid();
 
-			pw = getpwuid(geteuid());
+			errno = 0;			/* clear errno before call */
+			pw = getpwuid(user_id);
 			if (!pw)
 			{
-				psql_error("could not get home directory: %s\n", strerror(errno));
+				psql_error("could not get home directory for user id %ld: %s\n",
+						   (long) user_id,
+						 errno ? strerror(errno) : _("user does not exist"));
 				exit(EXIT_FAILURE);
 			}
 			dir = pw->pw_dir;
@@ -297,7 +301,7 @@ exec_command(const char *cmd,
 	else if (strcmp(cmd, "conninfo") == 0)
 	{
 		char	   *db = PQdb(pset.db);
-		char	   *host = PQhost(pset.db);
+		char	   *host = (PQhostaddr(pset.db) != NULL) ? PQhostaddr(pset.db) : PQhost(pset.db);
 
 		if (db == NULL)
 			printf(_("You are currently not connected to a database.\n"));
@@ -407,7 +411,7 @@ exec_command(const char *cmd,
 				success = listSchemas(pattern, show_verbose, show_system);
 				break;
 			case 'o':
-				success = describeOperators(pattern, show_system);
+				success = describeOperators(pattern, show_verbose, show_system);
 				break;
 			case 'O':
 				success = listCollations(pattern, show_verbose, show_system);
@@ -1795,8 +1799,8 @@ printSSLInfo(void)
 		return;					/* no SSL */
 
 	SSL_get_cipher_bits(ssl, &sslbits);
-	printf(_("SSL connection (cipher: %s, bits: %d)\n"),
-		   SSL_get_cipher(ssl), sslbits);
+	printf(_("SSL connection (protocol: %s, cipher: %s, bits: %d)\n"),
+		   SSL_get_version(ssl), SSL_get_cipher(ssl), sslbits);
 #else
 
 	/*

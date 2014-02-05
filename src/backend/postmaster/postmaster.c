@@ -32,7 +32,7 @@
  *	  clients.
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -118,7 +118,6 @@
 #include "utils/builtins.h"
 #include "utils/datetime.h"
 #include "utils/dynamic_loader.h"
-#include "utils/guc.h"
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/timeout.h"
@@ -449,8 +448,6 @@ typedef struct
 typedef int InheritableSocket;
 #endif
 
-typedef struct LWLock LWLock;	/* ugly kluge */
-
 /*
  * Structure contains all variables passed to exec:ed backends
  */
@@ -471,7 +468,10 @@ typedef struct
 	slock_t    *ShmemLock;
 	VariableCache ShmemVariableCache;
 	Backend    *ShmemBackendArray;
-	LWLock	   *LWLockArray;
+#ifndef HAVE_SPINLOCKS
+	PGSemaphore	SpinlockSemaArray;
+#endif
+	LWLockPadded *MainLWLockArray;
 	slock_t    *ProcStructLock;
 	PROC_HDR   *ProcGlobal;
 	PGPROC	   *AuxiliaryProcs;
@@ -556,11 +556,6 @@ PostmasterMain(int argc, char *argv[])
 	 * for security, no dir or file created can be group or other accessible
 	 */
 	umask(S_IRWXG | S_IRWXO);
-
-	/*
-	 * Fire up essential subsystems: memory management
-	 */
-	MemoryContextInit();
 
 	/*
 	 * By default, palloc() requests in the postmaster will be allocated in
@@ -816,10 +811,10 @@ PostmasterMain(int argc, char *argv[])
 	}
 	if (XLogArchiveMode && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
-				(errmsg("WAL archival (archive_mode=on) requires wal_level \"archive\" or \"hot_standby\"")));
+				(errmsg("WAL archival (archive_mode=on) requires wal_level \"archive\", \"hot_standby\" or \"logical\"")));
 	if (max_wal_senders > 0 && wal_level == WAL_LEVEL_MINIMAL)
 		ereport(ERROR,
-				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"archive\" or \"hot_standby\"")));
+				(errmsg("WAL streaming (max_wal_senders > 0) requires wal_level \"archive\", \"hot_standby\" or \"logical\"")));
 
 	/*
 	 * Other one-time internal sanity checks can go here, if they are fast.
@@ -4465,7 +4460,6 @@ SubPostmasterMain(int argc, char *argv[])
 	whereToSendOutput = DestNone;
 
 	/* Setup essential subsystems (to ensure elog() behaves sanely) */
-	MemoryContextInit();
 	InitializeGUCOptions();
 
 	/* Read in the variables file */
@@ -5580,7 +5574,6 @@ PostmasterMarkPIDForWorkerNotify(int pid)
  * functions.  They are marked NON_EXEC_STATIC in their home modules.
  */
 extern slock_t *ShmemLock;
-extern LWLock *LWLockArray;
 extern slock_t *ProcStructLock;
 extern PGPROC *AuxiliaryProcs;
 extern PMSignalData *PMSignalState;
@@ -5626,7 +5619,10 @@ save_backend_variables(BackendParameters *param, Port *port,
 	param->ShmemVariableCache = ShmemVariableCache;
 	param->ShmemBackendArray = ShmemBackendArray;
 
-	param->LWLockArray = LWLockArray;
+#ifndef HAVE_SPINLOCKS
+	param->SpinlockSemaArray = SpinlockSemaArray;
+#endif
+	param->MainLWLockArray = MainLWLockArray;
 	param->ProcStructLock = ProcStructLock;
 	param->ProcGlobal = ProcGlobal;
 	param->AuxiliaryProcs = AuxiliaryProcs;
@@ -5854,7 +5850,10 @@ restore_backend_variables(BackendParameters *param, Port *port)
 	ShmemVariableCache = param->ShmemVariableCache;
 	ShmemBackendArray = param->ShmemBackendArray;
 
-	LWLockArray = param->LWLockArray;
+#ifndef HAVE_SPINLOCKS
+	SpinlockSemaArray = param->SpinlockSemaArray;
+#endif
+	MainLWLockArray = param->MainLWLockArray;
 	ProcStructLock = param->ProcStructLock;
 	ProcGlobal = param->ProcGlobal;
 	AuxiliaryProcs = param->AuxiliaryProcs;

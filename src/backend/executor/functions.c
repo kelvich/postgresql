@@ -3,7 +3,7 @@
  * functions.c
  *	  Execution of SQL-language functions
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -310,12 +310,20 @@ sql_fn_post_column_ref(ParseState *pstate, ColumnRef *cref, Node *var)
 	 *			(the first possibility takes precedence)
 	 * A.B.C	A = function name, B = record-typed parameter name,
 	 *			C = field name
+	 * A.*		Whole-row reference to composite parameter A.
+	 * A.B.*	Same, with A = function name, B = parameter name
+	 *
+	 * Here, it's sufficient to ignore the "*" in the last two cases --- the
+	 * main parser will take care of expanding the whole-row reference.
 	 *----------
 	 */
 	nnames = list_length(cref->fields);
 
 	if (nnames > 3)
 		return NULL;
+
+	if (IsA(llast(cref->fields), A_Star))
+		nnames--;
 
 	field1 = (Node *) linitial(cref->fields);
 	Assert(IsA(field1, String));
@@ -380,8 +388,8 @@ sql_fn_post_column_ref(ParseState *pstate, ColumnRef *cref, Node *var)
 		param = ParseFuncOrColumn(pstate,
 								  list_make1(subfield),
 								  list_make1(param),
-								  NIL, NULL, false, false, false,
-								  NULL, true, cref->location);
+								  NULL,
+								  cref->location);
 	}
 
 	return param;

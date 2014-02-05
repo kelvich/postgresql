@@ -3,7 +3,7 @@
  * fe-connect.c
  *	  functions related to setting up a connection to the backend
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -278,7 +278,7 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 		"Require-Peer", "", 10,
 	offsetof(struct pg_conn, requirepeer)},
 
-#if defined(KRB5) || defined(ENABLE_GSS) || defined(ENABLE_SSPI)
+#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 	/* Kerberos and GSSAPI authentication support specifying the service name */
 	{"krbsrvname", "PGKRBSRVNAME", PG_KRB_SRVNAM, NULL,
 		"Kerberos-service-name", "", 20,
@@ -875,7 +875,8 @@ PQconndefaults(void)
 	connOptions = conninfo_init(&errorBuf);
 	if (connOptions != NULL)
 	{
-		if (!conninfo_add_defaults(connOptions, &errorBuf))
+		/* pass NULL errorBuf to ignore errors */
+		if (!conninfo_add_defaults(connOptions, NULL))
 		{
 			PQconninfoFree(connOptions);
 			connOptions = NULL;
@@ -2822,7 +2823,7 @@ freePGconn(PGconn *conn)
 		free(conn->sslcompression);
 	if (conn->requirepeer)
 		free(conn->requirepeer);
-#if defined(KRB5) || defined(ENABLE_GSS) || defined(ENABLE_SSPI)
+#if defined(ENABLE_GSS) || defined(ENABLE_SSPI)
 	if (conn->krbsrvname)
 		free(conn->krbsrvname);
 #endif
@@ -4412,9 +4413,10 @@ conninfo_array_parse(const char *const * keywords, const char *const * values,
  *
  * Defaults are obtained from a service file, environment variables, etc.
  *
- * Returns TRUE if successful, otherwise FALSE; errorMessage is filled in
- * upon failure.  Note that failure to locate a default value is not an
- * error condition here --- we just leave the option's value as NULL.
+ * Returns TRUE if successful, otherwise FALSE; errorMessage, if supplied,
+ * is filled in upon failure.  Note that failure to locate a default value
+ * is not an error condition here --- we just leave the option's value as
+ * NULL.
  */
 static bool
 conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
@@ -4424,9 +4426,10 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 
 	/*
 	 * If there's a service spec, use it to obtain any not-explicitly-given
-	 * parameters.
+	 * parameters.  Ignore error if no error message buffer is passed
+	 * because there is no way to pass back the failure message.
 	 */
-	if (parseServiceInfo(options, errorMessage) != 0)
+	if (parseServiceInfo(options, errorMessage) != 0 && errorMessage)
 		return false;
 
 	/*
@@ -4448,8 +4451,9 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 				option->val = strdup(tmp);
 				if (!option->val)
 				{
-					printfPQExpBuffer(errorMessage,
-									  libpq_gettext("out of memory\n"));
+					if (errorMessage)
+						printfPQExpBuffer(errorMessage,
+										  libpq_gettext("out of memory\n"));
 					return false;
 				}
 				continue;
@@ -4465,8 +4469,9 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 			option->val = strdup(option->compiled);
 			if (!option->val)
 			{
-				printfPQExpBuffer(errorMessage,
-								  libpq_gettext("out of memory\n"));
+				if (errorMessage)
+					printfPQExpBuffer(errorMessage,
+									  libpq_gettext("out of memory\n"));
 				return false;
 			}
 			continue;
@@ -4477,7 +4482,7 @@ conninfo_add_defaults(PQconninfoOption *options, PQExpBuffer errorMessage)
 		 */
 		if (strcmp(option->keyword, "user") == 0)
 		{
-			option->val = pg_fe_getauthname(errorMessage);
+			option->val = pg_fe_getauthname();
 			continue;
 		}
 	}
@@ -5183,7 +5188,24 @@ PQhost(const PGconn *conn)
 {
 	if (!conn)
 		return NULL;
-	return conn->pghost ? conn->pghost : conn->pgunixsocket;
+	if (conn->pghost != NULL && conn->pghost[0] != '\0')
+		return conn->pghost;
+	else
+	{
+#ifdef HAVE_UNIX_SOCKETS
+		return conn->pgunixsocket;
+#else
+		return DefaultHost;
+#endif
+	}
+}
+
+char *
+PQhostaddr(const PGconn *conn)
+{
+	if (!conn)
+		return NULL;
+	return conn->pghostaddr;
 }
 
 char *

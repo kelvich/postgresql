@@ -3,7 +3,7 @@
  * pgstatfuncs.c
  *	  Functions for accessing the statistics collector data
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -86,6 +86,8 @@ extern Datum pg_stat_get_db_temp_files(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_db_temp_bytes(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_db_blk_read_time(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_db_blk_write_time(PG_FUNCTION_ARGS);
+
+extern Datum pg_stat_get_archiver(PG_FUNCTION_ARGS);
 
 extern Datum pg_stat_get_bgwriter_timed_checkpoints(PG_FUNCTION_ARGS);
 extern Datum pg_stat_get_bgwriter_requested_checkpoints(PG_FUNCTION_ARGS);
@@ -618,7 +620,6 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		bool		nulls[14];
 		HeapTuple	tuple;
 		PgBackendStatus *beentry;
-		SockAddr	zero_clientaddr;
 
 		MemSet(values, 0, sizeof(values));
 		MemSet(nulls, 0, sizeof(nulls));
@@ -659,6 +660,8 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 		/* Values only available to same user or superuser */
 		if (superuser() || beentry->st_userid == GetUserId())
 		{
+			SockAddr	zero_clientaddr;
+
 			switch (beentry->st_state)
 			{
 				case STATE_IDLE:
@@ -710,7 +713,7 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			/* A zeroed client addr means we don't know */
 			memset(&zero_clientaddr, 0, sizeof(zero_clientaddr));
 			if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr,
-					   sizeof(zero_clientaddr) == 0))
+					   sizeof(zero_clientaddr)) == 0)
 			{
 				nulls[11] = true;
 				nulls[12] = true;
@@ -974,7 +977,7 @@ pg_stat_get_backend_client_addr(PG_FUNCTION_ARGS)
 	/* A zeroed client addr means we don't know */
 	memset(&zero_clientaddr, 0, sizeof(zero_clientaddr));
 	if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr,
-			   sizeof(zero_clientaddr) == 0))
+			   sizeof(zero_clientaddr)) == 0)
 		PG_RETURN_NULL();
 
 	switch (beentry->st_clientaddr.addr.ss_family)
@@ -1021,7 +1024,7 @@ pg_stat_get_backend_client_port(PG_FUNCTION_ARGS)
 	/* A zeroed client addr means we don't know */
 	memset(&zero_clientaddr, 0, sizeof(zero_clientaddr));
 	if (memcmp(&(beentry->st_clientaddr), &zero_clientaddr,
-			   sizeof(zero_clientaddr) == 0))
+			   sizeof(zero_clientaddr)) == 0)
 		PG_RETURN_NULL();
 
 	switch (beentry->st_clientaddr.addr.ss_family)
@@ -1710,4 +1713,71 @@ pg_stat_reset_single_function_counters(PG_FUNCTION_ARGS)
 	pgstat_reset_single_counter(funcoid, RESET_FUNCTION);
 
 	PG_RETURN_VOID();
+}
+
+Datum
+pg_stat_get_archiver(PG_FUNCTION_ARGS)
+{
+	TupleDesc	tupdesc;
+	Datum		values[7];
+	bool		nulls[7];
+	PgStat_ArchiverStats *archiver_stats;
+
+	/* Initialise values and NULL flags arrays */
+	MemSet(values, 0, sizeof(values));
+	MemSet(nulls, 0, sizeof(nulls));
+
+	/* Initialise attributes information in the tuple descriptor */
+	tupdesc = CreateTemplateTupleDesc(7, false);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "archived_count",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "last_archived_wal",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "last_archived_time",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "failed_count",
+					   INT8OID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "last_failed_wal",
+					   TEXTOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 6, "last_failed_time",
+					   TIMESTAMPTZOID, -1, 0);
+	TupleDescInitEntry(tupdesc, (AttrNumber) 7, "stats_reset",
+					   TIMESTAMPTZOID, -1, 0);
+
+	BlessTupleDesc(tupdesc);
+
+	/* Get statistics about the archiver process */
+	archiver_stats = pgstat_fetch_stat_archiver();
+
+	/* Fill values and NULLs */
+	values[0] = Int64GetDatum(archiver_stats->archived_count);
+	if (*(archiver_stats->last_archived_wal) == '\0')
+		nulls[1] = true;
+	else
+		values[1] = CStringGetTextDatum(archiver_stats->last_archived_wal);
+
+	if (archiver_stats->last_archived_timestamp == 0)
+		nulls[2] = true;
+	else
+		values[2] = TimestampTzGetDatum(archiver_stats->last_archived_timestamp);
+
+	values[3] = Int64GetDatum(archiver_stats->failed_count);
+	if (*(archiver_stats->last_failed_wal) == '\0')
+		nulls[4] = true;
+	else
+		values[4] = CStringGetTextDatum(archiver_stats->last_failed_wal);
+
+	if (archiver_stats->last_failed_timestamp == 0)
+		nulls[5] = true;
+	else
+		values[5] = TimestampTzGetDatum(archiver_stats->last_failed_timestamp);
+
+	if (archiver_stats->stat_reset_timestamp == 0)
+		nulls[6] = true;
+	else
+		values[6] = TimestampTzGetDatum(archiver_stats->stat_reset_timestamp);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(
+						heap_form_tuple(tupdesc, values, nulls)));
 }

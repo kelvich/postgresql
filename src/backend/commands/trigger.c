@@ -3,7 +3,7 @@
  * trigger.c
  *	  PostgreSQL TRIGGERs support code.
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -2355,7 +2355,8 @@ ExecBRUpdateTriggers(EState *estate, EPQState *epqstate,
 	 * concurrency.
 	 */
 	modifiedCols = GetModifiedColumns(relinfo, estate);
-	keyCols = RelationGetIndexAttrBitmap(relinfo->ri_RelationDesc, true);
+	keyCols = RelationGetIndexAttrBitmap(relinfo->ri_RelationDesc,
+										 INDEX_ATTR_BITMAP_KEY);
 	if (bms_overlap(keyCols, modifiedCols))
 		lockmode = LockTupleExclusive;
 	else

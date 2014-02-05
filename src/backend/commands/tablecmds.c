@@ -3,7 +3,7 @@
  * tablecmds.c
  *	  Commands for creating and altering table structures and settings
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -690,9 +690,27 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId)
  * non-existent relation
  */
 static void
-DropErrorMsgNonExistent(const char *relname, char rightkind, bool missing_ok)
+DropErrorMsgNonExistent(RangeVar *rel, char rightkind, bool missing_ok)
 {
 	const struct dropmsgstrings *rentry;
+
+	if (rel->schemaname != NULL &&
+		!OidIsValid(LookupNamespaceNoError(rel->schemaname)))
+	{
+		if (!missing_ok)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_SCHEMA),
+					 errmsg("schema \"%s\" does not exist", rel->schemaname)));
+		}
+		else
+		{
+			ereport(NOTICE,
+					(errmsg("schema \"%s\" does not exist, skipping",
+							rel->schemaname)));
+		}
+		return;
+	}
 
 	for (rentry = dropmsgstringarray; rentry->kind != '\0'; rentry++)
 	{
@@ -702,11 +720,11 @@ DropErrorMsgNonExistent(const char *relname, char rightkind, bool missing_ok)
 			{
 				ereport(ERROR,
 						(errcode(rentry->nonexistent_code),
-						 errmsg(rentry->nonexistent_msg, relname)));
+						 errmsg(rentry->nonexistent_msg, rel->relname)));
 			}
 			else
 			{
-				ereport(NOTICE, (errmsg(rentry->skipping_msg, relname)));
+				ereport(NOTICE, (errmsg(rentry->skipping_msg, rel->relname)));
 				break;
 			}
 		}
@@ -845,7 +863,7 @@ RemoveRelations(DropStmt *drop)
 		/* Not there? */
 		if (!OidIsValid(relOid))
 		{
-			DropErrorMsgNonExistent(rel->relname, relkind, drop->missing_ok);
+			DropErrorMsgNonExistent(rel, relkind, drop->missing_ok);
 			continue;
 		}
 
@@ -3530,6 +3548,12 @@ ATRewriteTables(List **wqueue, LOCKMODE lockmode)
 				ereport(ERROR,
 						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 						 errmsg("cannot rewrite system relation \"%s\"",
+								RelationGetRelationName(OldHeap))));
+
+			if (RelationIsUsedAsCatalogTable(OldHeap))
+				ereport(ERROR,
+						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						 errmsg("cannot rewrite table \"%s\" used as a catalog table",
 								RelationGetRelationName(OldHeap))));
 
 			/*
@@ -8704,21 +8728,26 @@ static void
 ATPrepSetTableSpace(AlteredTableInfo *tab, Relation rel, char *tablespacename, LOCKMODE lockmode)
 {
 	Oid			tablespaceId;
-	AclResult	aclresult;
 
 	/* Check that the tablespace exists */
 	tablespaceId = get_tablespace_oid(tablespacename, false);
 
-	/* Check its permissions */
-	aclresult = pg_tablespace_aclcheck(tablespaceId, GetUserId(), ACL_CREATE);
-	if (aclresult != ACLCHECK_OK)
-		aclcheck_error(aclresult, ACL_KIND_TABLESPACE, tablespacename);
+	/* Check permissions except when moving to database's default */
+	if (OidIsValid(tablespaceId) && tablespaceId != MyDatabaseTableSpace)
+	{
+		AclResult	aclresult;
+
+		aclresult = pg_tablespace_aclcheck(tablespaceId, GetUserId(), ACL_CREATE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, ACL_KIND_TABLESPACE, tablespacename);
+	}
 
 	/* Save info for Phase 3 to do the real work */
 	if (OidIsValid(tab->newTableSpace))
 		ereport(ERROR,
 				(errcode(ERRCODE_SYNTAX_ERROR),
 				 errmsg("cannot have multiple SET TABLESPACE subcommands")));
+
 	tab->newTableSpace = tablespaceId;
 }
 
@@ -9130,9 +9159,13 @@ copy_relation_data(SMgrRelation src, SMgrRelation dst,
 										   src->smgr_rnode.backend,
 										   forkNum))));
 
-		/* XLOG stuff */
+		/*
+		 * WAL-log the copied page. Unfortunately we don't know what kind of
+		 * a page this is, so we have to log the full page including any
+		 * unused space.
+		 */
 		if (use_wal)
-			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page);
+			log_newpage(&dst->smgr_rnode.node, forkNum, blkno, page, false);
 
 		PageSetChecksumInplace(page, blkno);
 

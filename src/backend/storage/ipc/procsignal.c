@@ -4,7 +4,7 @@
  *	  Routines for interprocess signalling
  *
  *
- * Portions Copyright (c) 1996-2013, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  * IDENTIFICATION
@@ -149,6 +149,13 @@ CleanupProcSignalState(int status, Datum arg)
 	slot = &ProcSignalSlots[pss_idx - 1];
 	Assert(slot == MyProcSignalSlot);
 
+	/*
+	 * Clear MyProcSignalSlot, so that a SIGUSR1 received after this point
+	 * won't try to access it after it's no longer ours (and perhaps even
+	 * after we've unmapped the shared memory segment).
+	 */
+	MyProcSignalSlot = NULL;
+
 	/* sanity check */
 	if (slot->pss_pid != MyProcPid)
 	{
@@ -285,7 +292,7 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN))
 		RecoveryConflictInterrupt(PROCSIG_RECOVERY_CONFLICT_BUFFERPIN);
 
-	if (set_latch_on_sigusr1)
+	if (set_latch_on_sigusr1 && MyProc != NULL)
 		SetLatch(&MyProc->procLatch);
 
 	latch_sigusr1_handler();
