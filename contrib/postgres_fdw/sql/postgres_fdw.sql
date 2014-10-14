@@ -5,8 +5,14 @@
 CREATE EXTENSION postgres_fdw;
 
 CREATE SERVER testserver1 FOREIGN DATA WRAPPER postgres_fdw;
-CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw
-  OPTIONS (dbname 'contrib_regression');
+DO $d$
+    BEGIN
+        EXECUTE $$CREATE SERVER loopback FOREIGN DATA WRAPPER postgres_fdw
+            OPTIONS (dbname '$$||current_database()||$$',
+                     port '$$||current_setting('port')||$$'
+            )$$;
+    END;
+$d$;
 
 CREATE USER MAPPING FOR public SERVER testserver1
 	OPTIONS (user 'value', password 'value');
@@ -194,6 +200,15 @@ EXPLAIN (VERBOSE, COSTS false) SELECT * FROM ft1 t1 WHERE c8 = 'foo';  -- can't 
 EXPLAIN (VERBOSE, COSTS false)
   SELECT * FROM ft2 a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
 SELECT * FROM ft2 a, ft2 b WHERE a.c1 = 47 AND b.c1 = a.c2;
+-- check both safe and unsafe join conditions
+EXPLAIN (VERBOSE, COSTS false)
+  SELECT * FROM ft2 a, ft2 b
+  WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+SELECT * FROM ft2 a, ft2 b
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+-- bug before 9.3.5 due to sloppy handling of remote-estimate parameters
+SELECT * FROM ft1 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
+SELECT * FROM ft2 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft1 WHERE c1 < 5));
 
 -- ===================================================================
 -- parameterized queries
@@ -384,3 +399,276 @@ insert into loc1(f2) values('bye');
 insert into rem1(f2) values('bye remote');
 select * from loc1;
 select * from rem1;
+
+-- ===================================================================
+-- test local triggers
+-- ===================================================================
+
+-- Trigger functions "borrowed" from triggers regress test.
+CREATE FUNCTION trigger_func() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+	RAISE NOTICE 'trigger_func(%) called: action = %, when = %, level = %',
+		TG_ARGV[0], TG_OP, TG_WHEN, TG_LEVEL;
+	RETURN NULL;
+END;$$;
+
+CREATE TRIGGER trig_stmt_before BEFORE DELETE OR INSERT OR UPDATE ON rem1
+	FOR EACH STATEMENT EXECUTE PROCEDURE trigger_func();
+CREATE TRIGGER trig_stmt_after AFTER DELETE OR INSERT OR UPDATE ON rem1
+	FOR EACH STATEMENT EXECUTE PROCEDURE trigger_func();
+
+CREATE OR REPLACE FUNCTION trigger_data()  RETURNS trigger
+LANGUAGE plpgsql AS $$
+
+declare
+	oldnew text[];
+	relid text;
+    argstr text;
+begin
+
+	relid := TG_relid::regclass;
+	argstr := '';
+	for i in 0 .. TG_nargs - 1 loop
+		if i > 0 then
+			argstr := argstr || ', ';
+		end if;
+		argstr := argstr || TG_argv[i];
+	end loop;
+
+    RAISE NOTICE '%(%) % % % ON %',
+		tg_name, argstr, TG_when, TG_level, TG_OP, relid;
+    oldnew := '{}'::text[];
+	if TG_OP != 'INSERT' then
+		oldnew := array_append(oldnew, format('OLD: %s', OLD));
+	end if;
+
+	if TG_OP != 'DELETE' then
+		oldnew := array_append(oldnew, format('NEW: %s', NEW));
+	end if;
+
+    RAISE NOTICE '%', array_to_string(oldnew, ',');
+
+	if TG_OP = 'DELETE' then
+		return OLD;
+	else
+		return NEW;
+	end if;
+end;
+$$;
+
+-- Test basic functionality
+CREATE TRIGGER trig_row_before
+BEFORE INSERT OR UPDATE OR DELETE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+CREATE TRIGGER trig_row_after
+AFTER INSERT OR UPDATE OR DELETE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+delete from rem1;
+insert into rem1 values(1,'insert');
+update rem1 set f2  = 'update' where f1 = 1;
+update rem1 set f2 = f2 || f2;
+
+
+-- cleanup
+DROP TRIGGER trig_row_before ON rem1;
+DROP TRIGGER trig_row_after ON rem1;
+DROP TRIGGER trig_stmt_before ON rem1;
+DROP TRIGGER trig_stmt_after ON rem1;
+
+DELETE from rem1;
+
+
+-- Test WHEN conditions
+
+CREATE TRIGGER trig_row_before_insupd
+BEFORE INSERT OR UPDATE ON rem1
+FOR EACH ROW
+WHEN (NEW.f2 like '%update%')
+EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+CREATE TRIGGER trig_row_after_insupd
+AFTER INSERT OR UPDATE ON rem1
+FOR EACH ROW
+WHEN (NEW.f2 like '%update%')
+EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+-- Insert or update not matching: nothing happens
+INSERT INTO rem1 values(1, 'insert');
+UPDATE rem1 set f2 = 'test';
+
+-- Insert or update matching: triggers are fired
+INSERT INTO rem1 values(2, 'update');
+UPDATE rem1 set f2 = 'update update' where f1 = '2';
+
+CREATE TRIGGER trig_row_before_delete
+BEFORE DELETE ON rem1
+FOR EACH ROW
+WHEN (OLD.f2 like '%update%')
+EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+CREATE TRIGGER trig_row_after_delete
+AFTER DELETE ON rem1
+FOR EACH ROW
+WHEN (OLD.f2 like '%update%')
+EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+-- Trigger is fired for f1=2, not for f1=1
+DELETE FROM rem1;
+
+-- cleanup
+DROP TRIGGER trig_row_before_insupd ON rem1;
+DROP TRIGGER trig_row_after_insupd ON rem1;
+DROP TRIGGER trig_row_before_delete ON rem1;
+DROP TRIGGER trig_row_after_delete ON rem1;
+
+
+-- Test various RETURN statements in BEFORE triggers.
+
+CREATE FUNCTION trig_row_before_insupdate() RETURNS TRIGGER AS $$
+  BEGIN
+    NEW.f2 := NEW.f2 || ' triggered !';
+    RETURN NEW;
+  END
+$$ language plpgsql;
+
+CREATE TRIGGER trig_row_before_insupd
+BEFORE INSERT OR UPDATE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trig_row_before_insupdate();
+
+-- The new values should have 'triggered' appended
+INSERT INTO rem1 values(1, 'insert');
+SELECT * from loc1;
+INSERT INTO rem1 values(2, 'insert') RETURNING f2;
+SELECT * from loc1;
+UPDATE rem1 set f2 = '';
+SELECT * from loc1;
+UPDATE rem1 set f2 = 'skidoo' RETURNING f2;
+SELECT * from loc1;
+
+DELETE FROM rem1;
+
+-- Add a second trigger, to check that the changes are propagated correctly
+-- from trigger to trigger
+CREATE TRIGGER trig_row_before_insupd2
+BEFORE INSERT OR UPDATE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trig_row_before_insupdate();
+
+INSERT INTO rem1 values(1, 'insert');
+SELECT * from loc1;
+INSERT INTO rem1 values(2, 'insert') RETURNING f2;
+SELECT * from loc1;
+UPDATE rem1 set f2 = '';
+SELECT * from loc1;
+UPDATE rem1 set f2 = 'skidoo' RETURNING f2;
+SELECT * from loc1;
+
+DROP TRIGGER trig_row_before_insupd ON rem1;
+DROP TRIGGER trig_row_before_insupd2 ON rem1;
+
+DELETE from rem1;
+
+INSERT INTO rem1 VALUES (1, 'test');
+
+-- Test with a trigger returning NULL
+CREATE FUNCTION trig_null() RETURNS TRIGGER AS $$
+  BEGIN
+    RETURN NULL;
+  END
+$$ language plpgsql;
+
+CREATE TRIGGER trig_null
+BEFORE INSERT OR UPDATE OR DELETE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trig_null();
+
+-- Nothing should have changed.
+INSERT INTO rem1 VALUES (2, 'test2');
+
+SELECT * from loc1;
+
+UPDATE rem1 SET f2 = 'test2';
+
+SELECT * from loc1;
+
+DELETE from rem1;
+
+SELECT * from loc1;
+
+DROP TRIGGER trig_null ON rem1;
+DELETE from rem1;
+
+-- Test a combination of local and remote triggers
+CREATE TRIGGER trig_row_before
+BEFORE INSERT OR UPDATE OR DELETE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+CREATE TRIGGER trig_row_after
+AFTER INSERT OR UPDATE OR DELETE ON rem1
+FOR EACH ROW EXECUTE PROCEDURE trigger_data(23,'skidoo');
+
+CREATE TRIGGER trig_local_before BEFORE INSERT OR UPDATE ON loc1
+FOR EACH ROW EXECUTE PROCEDURE trig_row_before_insupdate();
+
+INSERT INTO rem1(f2) VALUES ('test');
+UPDATE rem1 SET f2 = 'testo';
+
+-- Test returning a system attribute
+INSERT INTO rem1(f2) VALUES ('test') RETURNING ctid;
+
+-- ===================================================================
+-- test IMPORT FOREIGN SCHEMA
+-- ===================================================================
+
+CREATE SCHEMA import_source;
+CREATE TABLE import_source.t1 (c1 int, c2 varchar NOT NULL);
+CREATE TABLE import_source.t2 (c1 int default 42, c2 varchar NULL, c3 text collate "POSIX");
+CREATE TYPE typ1 AS (m1 int, m2 varchar);
+CREATE TABLE import_source.t3 (c1 timestamptz default now(), c2 typ1);
+CREATE TABLE import_source."x 4" (c1 float8, "C 2" text, c3 varchar(42));
+CREATE TABLE import_source."x 5" (c1 float8);
+ALTER TABLE import_source."x 5" DROP COLUMN c1;
+
+CREATE SCHEMA import_dest1;
+IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest1;
+\det+ import_dest1
+\d import_dest1.*
+
+-- Options
+CREATE SCHEMA import_dest2;
+IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest2
+  OPTIONS (import_default 'true');
+\det+ import_dest2
+\d import_dest2.*
+CREATE SCHEMA import_dest3;
+IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest3
+  OPTIONS (import_collate 'false', import_not_null 'false');
+\det+ import_dest3
+\d import_dest3.*
+
+-- Check LIMIT TO and EXCEPT
+CREATE SCHEMA import_dest4;
+IMPORT FOREIGN SCHEMA import_source LIMIT TO (t1, nonesuch)
+  FROM SERVER loopback INTO import_dest4;
+\det+ import_dest4
+IMPORT FOREIGN SCHEMA import_source EXCEPT (t1, "x 4", nonesuch)
+  FROM SERVER loopback INTO import_dest4;
+\det+ import_dest4
+
+-- Assorted error cases
+IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest4;
+IMPORT FOREIGN SCHEMA nonesuch FROM SERVER loopback INTO import_dest4;
+IMPORT FOREIGN SCHEMA nonesuch FROM SERVER loopback INTO notthere;
+IMPORT FOREIGN SCHEMA nonesuch FROM SERVER nowhere INTO notthere;
+
+-- Check case of a type present only on the remote server.
+-- We can fake this by dropping the type locally in our transaction.
+CREATE TYPE "Colors" AS ENUM ('red', 'green', 'blue');
+CREATE TABLE import_source.t5 (c1 int, c2 text collate "C", "Col" "Colors");
+
+CREATE SCHEMA import_dest5;
+BEGIN;
+DROP TYPE "Colors" CASCADE;
+IMPORT FOREIGN SCHEMA import_source LIMIT TO (t5)
+  FROM SERVER loopback INTO import_dest5;  -- ERROR
+ROLLBACK;

@@ -19,7 +19,7 @@
  *	ExecutorRun accepts direction and count arguments that specify whether
  *	the plan is to be executed forwards, backwards, and for how many tuples.
  *	In some cases ExecutorRun may be called multiple times to process all
- *	the tuples for a plan.	It is also acceptable to stop short of executing
+ *	the tuples for a plan.  It is also acceptable to stop short of executing
  *	the whole plan (but only if it is a SELECT).
  *
  *	ExecutorFinish must be called after the final ExecutorRun call and
@@ -329,12 +329,12 @@ standard_ExecutorRun(QueryDesc *queryDesc,
  *		ExecutorFinish
  *
  *		This routine must be called after the last ExecutorRun call.
- *		It performs cleanup such as firing AFTER triggers.	It is
+ *		It performs cleanup such as firing AFTER triggers.  It is
  *		separate from ExecutorEnd because EXPLAIN ANALYZE needs to
  *		include these actions in the total runtime.
  *
  *		We provide a function hook variable that lets loadable plugins
- *		get control when ExecutorFinish is called.	Such a plugin would
+ *		get control when ExecutorFinish is called.  Such a plugin would
  *		normally call standard_ExecutorFinish().
  *
  * ----------------------------------------------------------------
@@ -501,6 +501,12 @@ ExecutorRewind(QueryDesc *queryDesc)
  *
  * Returns true if permissions are adequate.  Otherwise, throws an appropriate
  * error if ereport_on_violation is true, or simply returns false otherwise.
+ *
+ * Note that this does NOT address row-level security policies (aka: RLS).  If
+ * rows will be returned to the user as a result of this permission check
+ * passing, then RLS also needs to be consulted (and check_enable_rls()).
+ *
+ * See rewrite/rowsecurity.c.
  */
 bool
 ExecCheckRTPerms(List *rangeTable, bool ereport_on_violation)
@@ -565,7 +571,7 @@ ExecCheckRTEPerms(RangeTblEntry *rte)
 	 * userid to check as: current user unless we have a setuid indication.
 	 *
 	 * Note: GetUserId() is presently fast enough that there's no harm in
-	 * calling it separately for each RTE.	If that stops being true, we could
+	 * calling it separately for each RTE.  If that stops being true, we could
 	 * call it once in ExecCheckRTPerms and pass the userid down from there.
 	 * But for now, no need for the extra clutter.
 	 */
@@ -830,7 +836,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 		erm->prti = rc->prti;
 		erm->rowmarkId = rc->rowmarkId;
 		erm->markType = rc->markType;
-		erm->noWait = rc->noWait;
+		erm->waitPolicy = rc->waitPolicy;
 		ItemPointerSetInvalid(&(erm->curCtid));
 		estate->es_rowMarks = lappend(estate->es_rowMarks, erm);
 	}
@@ -1102,14 +1108,15 @@ CheckValidRowMarkRel(Relation rel, RowMarkType markType)
 							RelationGetRelationName(rel))));
 			break;
 		case RELKIND_MATVIEW:
-			/* Should not get here */
-			ereport(ERROR,
-					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot lock rows in materialized view \"%s\"",
-							RelationGetRelationName(rel))));
+			/* Allow referencing a matview, but not actual locking clauses */
+			if (markType != ROW_MARK_REFERENCE)
+				ereport(ERROR,
+						(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					   errmsg("cannot lock rows in materialized view \"%s\"",
+							  RelationGetRelationName(rel))));
 			break;
 		case RELKIND_FOREIGN_TABLE:
-			/* Should not get here */
+			/* Should not get here; planner should have used ROW_MARK_COPY */
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg("cannot lock rows in foreign table \"%s\"",
@@ -1183,7 +1190,7 @@ InitResultRelInfo(ResultRelInfo *resultRelInfo,
  * if so it doesn't matter which one we pick.)  However, it is sometimes
  * necessary to fire triggers on other relations; this happens mainly when an
  * RI update trigger queues additional triggers on other relations, which will
- * be processed in the context of the outer query.	For efficiency's sake,
+ * be processed in the context of the outer query.  For efficiency's sake,
  * we want to have a ResultRelInfo for those triggers too; that can avoid
  * repeated re-opening of the relation.  (It also provides a way for EXPLAIN
  * ANALYZE to report the runtimes of such triggers.)  So we make additional
@@ -1220,7 +1227,7 @@ ExecGetTriggerResultRel(EState *estate, Oid relid)
 	/*
 	 * Open the target relation's relcache entry.  We assume that an
 	 * appropriate lock is still held by the backend from whenever the trigger
-	 * event got queued, so we need take no new lock here.	Also, we need not
+	 * event got queued, so we need take no new lock here.  Also, we need not
 	 * recheck the relkind, so no need for CheckValidResultRel.
 	 */
 	rel = heap_open(relid, NoLock);
@@ -1326,7 +1333,7 @@ ExecPostprocessPlan(EState *estate)
 
 	/*
 	 * Run any secondary ModifyTable nodes to completion, in case the main
-	 * query did not fetch all rows from them.	(We do this to ensure that
+	 * query did not fetch all rows from them.  (We do this to ensure that
 	 * such nodes have predictable results.)
 	 */
 	foreach(lc, estate->es_auxmodifytables)
@@ -1638,7 +1645,8 @@ ExecWithCheckOptions(ResultRelInfo *resultRelInfo,
 					 TupleTableSlot *slot, EState *estate)
 {
 	ExprContext *econtext;
-	ListCell   *l1, *l2;
+	ListCell   *l1,
+			   *l2;
 
 	/*
 	 * We will use the EState's per-tuple context for evaluating constraint
@@ -1654,20 +1662,22 @@ ExecWithCheckOptions(ResultRelInfo *resultRelInfo,
 			l2, resultRelInfo->ri_WithCheckOptionExprs)
 	{
 		WithCheckOption *wco = (WithCheckOption *) lfirst(l1);
-		ExprState	   *wcoExpr = (ExprState *) lfirst(l2);
+		ExprState  *wcoExpr = (ExprState *) lfirst(l2);
 
 		/*
 		 * WITH CHECK OPTION checks are intended to ensure that the new tuple
-		 * is visible in the view.  If the view's qual evaluates to NULL, then
-		 * the new tuple won't be included in the view.  Therefore we need to
-		 * tell ExecQual to return FALSE for NULL (the opposite of what we do
-		 * above for CHECK constraints).
+		 * is visible (in the case of a view) or that it passes the
+		 * 'with-check' policy (in the case of row security).
+		 * If the qual evaluates to NULL or FALSE, then the new tuple won't be
+		 * included in the view or doesn't pass the 'with-check' policy for the
+		 * table.  We need ExecQual to return FALSE for NULL to handle the view
+		 * case (the opposite of what we do above for CHECK constraints).
 		 */
 		if (!ExecQual((List *) wcoExpr, econtext, false))
 			ereport(ERROR,
 					(errcode(ERRCODE_WITH_CHECK_OPTION_VIOLATION),
-					 errmsg("new row violates WITH CHECK OPTION for view \"%s\"",
-							wco->viewname),
+				 errmsg("new row violates WITH CHECK OPTION for \"%s\"",
+						wco->viewname),
 					 errdetail("Failing row contains %s.",
 							   ExecBuildSlotValueDescription(slot,
 							RelationGetDescr(resultRelInfo->ri_RelationDesc),
@@ -1680,7 +1690,7 @@ ExecWithCheckOptions(ResultRelInfo *resultRelInfo,
  *
  * This is intentionally very similar to BuildIndexValueDescription, but
  * unlike that function, we truncate long field values (to at most maxfieldlen
- * bytes).	That seems necessary here since heap field values could be very
+ * bytes).  That seems necessary here since heap field values could be very
  * long, whereas index entries typically aren't so wide.
  *
  * Also, unlike the case with index entries, we need to be prepared to ignore
@@ -1861,7 +1871,7 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 	/*
 	 * Get and lock the updated version of the row; if fail, return NULL.
 	 */
-	copyTuple = EvalPlanQualFetch(estate, relation, lockmode,
+	copyTuple = EvalPlanQualFetch(estate, relation, lockmode, LockWaitBlock,
 								  tid, priorXmax);
 
 	if (copyTuple == NULL)
@@ -1874,7 +1884,7 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
 	*tid = copyTuple->t_self;
 
 	/*
-	 * Need to run a recheck subquery.	Initialize or reinitialize EPQ state.
+	 * Need to run a recheck subquery.  Initialize or reinitialize EPQ state.
 	 */
 	EvalPlanQualBegin(epqstate, estate);
 
@@ -1920,11 +1930,15 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
  *	estate - executor state data
  *	relation - table containing tuple
  *	lockmode - requested tuple lock mode
+ *	wait_policy - requested lock wait policy
  *	*tid - t_ctid from the outdated tuple (ie, next updated version)
  *	priorXmax - t_xmax from the outdated tuple
  *
  * Returns a palloc'd copy of the newest tuple version, or NULL if we find
  * that there is no newest version (ie, the row was deleted not updated).
+ * We also return NULL if the tuple is locked and the wait policy is to skip
+ * such tuples.
+ *
  * If successful, we have locked the newest tuple version, so caller does not
  * need to worry about it changing anymore.
  *
@@ -1933,6 +1947,7 @@ EvalPlanQual(EState *estate, EPQState *epqstate,
  */
 HeapTuple
 EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
+				  LockWaitPolicy wait_policy,
 				  ItemPointer tid, TransactionId priorXmax)
 {
 	HeapTuple	copyTuple = NULL;
@@ -1957,7 +1972,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 
 			/*
 			 * If xmin isn't what we're expecting, the slot must have been
-			 * recycled and reused for an unrelated tuple.	This implies that
+			 * recycled and reused for an unrelated tuple.  This implies that
 			 * the latest version of the row was deleted, so we need do
 			 * nothing.  (Should be safe to examine xmin without getting
 			 * buffer's content lock, since xmin never changes in an existing
@@ -1976,12 +1991,30 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 
 			/*
 			 * If tuple is being updated by other transaction then we have to
-			 * wait for its commit/abort.
+			 * wait for its commit/abort, or die trying.
 			 */
 			if (TransactionIdIsValid(SnapshotDirty.xmax))
 			{
 				ReleaseBuffer(buffer);
-				XactLockTableWait(SnapshotDirty.xmax);
+				switch (wait_policy)
+				{
+					case LockWaitBlock:
+						XactLockTableWait(SnapshotDirty.xmax,
+										  relation, &tuple.t_data->t_ctid,
+										  XLTW_FetchUpdated);
+						break;
+					case LockWaitSkip:
+						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+							return NULL; /* skip instead of waiting */
+						break;
+					case LockWaitError:
+						if (!ConditionalXactLockTableWait(SnapshotDirty.xmax))
+							ereport(ERROR,
+									(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
+									 errmsg("could not obtain lock on row in relation \"%s\"",
+											RelationGetRelationName(relation))));
+						break;
+				}
 				continue;		/* loop back to repeat heap_fetch */
 			}
 
@@ -2008,7 +2041,7 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 			 */
 			test = heap_lock_tuple(relation, &tuple,
 								   estate->es_output_cid,
-								   lockmode, false /* wait */ ,
+								   lockmode, wait_policy,
 								   false, &buffer, &hufd);
 			/* We now have two pins on the buffer, get rid of one */
 			ReleaseBuffer(buffer);
@@ -2052,6 +2085,10 @@ EvalPlanQualFetch(EState *estate, Relation relation, int lockmode,
 						continue;
 					}
 					/* tuple was deleted, so give up */
+					return NULL;
+
+				case HeapTupleWouldBlock:
+					ReleaseBuffer(buffer);
 					return NULL;
 
 				default:
@@ -2196,7 +2233,7 @@ EvalPlanQualGetTuple(EPQState *epqstate, Index rti)
 
 /*
  * Fetch the current row values for any non-locked relations that need
- * to be scanned by an EvalPlanQual operation.	origslot must have been set
+ * to be scanned by an EvalPlanQual operation.  origslot must have been set
  * to contain the current result row (top-level row) that we need to recheck.
  */
 void
@@ -2425,7 +2462,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
 
 	/*
 	 * Each EState must have its own es_epqScanDone state, but if we have
-	 * nested EPQ checks they should share es_epqTuple arrays.	This allows
+	 * nested EPQ checks they should share es_epqTuple arrays.  This allows
 	 * sub-rechecks to inherit the values being examined by an outer recheck.
 	 */
 	estate->es_epqScanDone = (bool *) palloc0(rtsize * sizeof(bool));
@@ -2482,7 +2519,7 @@ EvalPlanQualStart(EPQState *epqstate, EState *parentestate, Plan *planTree)
  *
  * This is a cut-down version of ExecutorEnd(); basically we want to do most
  * of the normal cleanup, but *not* close result relations (which we are
- * just sharing from the outer query).	We do, however, have to close any
+ * just sharing from the outer query).  We do, however, have to close any
  * trigger target relations that got opened, since those are not shared.
  * (There probably shouldn't be any of the latter, but just in case...)
  */

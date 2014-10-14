@@ -1283,6 +1283,9 @@ and c.relname != 'my_locks'
 group by c.relname;
 
 create table alterlock (f1 int primary key, f2 text);
+insert into alterlock values (1, 'foo');
+create table alterlock2 (f3 int primary key, f1 int);
+insert into alterlock2 values (1, 1);
 
 begin; alter table alterlock alter column f2 set statistics 150;
 select * from my_locks order by 1;
@@ -1324,7 +1327,33 @@ begin; alter table alterlock alter column f2 set default 'x';
 select * from my_locks order by 1;
 rollback;
 
+begin;
+create trigger ttdummy
+	before delete or update on alterlock
+	for each row
+	execute procedure
+	ttdummy (1, 1);
+select * from my_locks order by 1;
+rollback;
+
+begin;
+select * from my_locks order by 1;
+alter table alterlock2 add foreign key (f1) references alterlock (f1);
+select * from my_locks order by 1;
+rollback;
+
+begin;
+alter table alterlock2
+add constraint alterlock2nv foreign key (f1) references alterlock (f1) NOT VALID;
+select * from my_locks order by 1;
+commit;
+begin;
+alter table alterlock2 validate constraint alterlock2nv;
+select * from my_locks order by 1;
+rollback;
+
 -- cleanup
+drop table alterlock2;
 drop table alterlock;
 drop view my_locks;
 drop type lockmodes;
@@ -1553,19 +1582,20 @@ ALTER TABLE IF EXISTS tt8 SET SCHEMA alter2;
 DROP TABLE alter2.tt8;
 DROP SCHEMA alter2;
 
--- Check that we map relation oids to filenodes and back correctly.
--- Don't display all the mappings so the test output doesn't change
--- all the time, but make sure we actually do test some values.
+-- Check that we map relation oids to filenodes and back correctly.  Only
+-- display bad mappings so the test output doesn't change all the time.  A
+-- filenode function call can return NULL for a relation dropped concurrently
+-- with the call's surrounding query, so ignore a NULL mapped_oid for
+-- relations that no longer exist after all calls finish.
+CREATE TEMP TABLE filenode_mapping AS
 SELECT
-    SUM((mapped_oid != oid OR mapped_oid IS NULL)::int) incorrectly_mapped,
-    count(*) > 200 have_mappings
-FROM (
-    SELECT
-        oid, reltablespace, relfilenode, relname,
-        pg_filenode_relation(reltablespace, pg_relation_filenode(oid)) mapped_oid
-    FROM pg_class
-    WHERE relkind IN ('r', 'i', 'S', 't', 'm')
-    ) mapped;
+    oid, mapped_oid, reltablespace, relfilenode, relname
+FROM pg_class,
+    pg_filenode_relation(reltablespace, pg_relation_filenode(oid)) AS mapped_oid
+WHERE relkind IN ('r', 'i', 'S', 't', 'm') AND mapped_oid IS DISTINCT FROM oid;
+
+SELECT m.* FROM filenode_mapping m LEFT JOIN pg_class c ON c.oid = m.oid
+WHERE c.oid IS NOT NULL OR m.mapped_oid IS NOT NULL;
 
 -- Checks on creating and manipulation of user defined relations in
 -- pg_catalog.
@@ -1594,3 +1624,55 @@ TRUNCATE old_system_table;
 ALTER TABLE old_system_table DROP CONSTRAINT new_system_table_pkey;
 ALTER TABLE old_system_table DROP COLUMN othercol;
 DROP TABLE old_system_table;
+
+-- set logged
+CREATE UNLOGGED TABLE unlogged1(f1 SERIAL PRIMARY KEY, f2 TEXT);
+-- check relpersistence of an unlogged table
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^unlogged1'
+UNION ALL
+SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^unlogged1'
+UNION ALL
+SELECT 'toast index', ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^unlogged1'
+ORDER BY relname;
+CREATE UNLOGGED TABLE unlogged2(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES unlogged1); -- foreign key
+CREATE UNLOGGED TABLE unlogged3(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES unlogged3); -- self-referencing foreign key
+ALTER TABLE unlogged3 SET LOGGED; -- skip self-referencing foreign key
+ALTER TABLE unlogged2 SET LOGGED; -- fails because a foreign key to an unlogged table exists
+ALTER TABLE unlogged1 SET LOGGED;
+-- check relpersistence of an unlogged table after changing to permament
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^unlogged1'
+UNION ALL
+SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^unlogged1'
+UNION ALL
+SELECT 'toast index', ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^unlogged1'
+ORDER BY relname;
+ALTER TABLE unlogged1 SET LOGGED; -- silently do nothing
+DROP TABLE unlogged3;
+DROP TABLE unlogged2;
+DROP TABLE unlogged1;
+-- set unlogged
+CREATE TABLE logged1(f1 SERIAL PRIMARY KEY, f2 TEXT);
+-- check relpersistence of a permanent table
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^logged1'
+UNION ALL
+SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^logged1'
+UNION ALL
+SELECT 'toast index', ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^logged1'
+ORDER BY relname;
+CREATE TABLE logged2(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES logged1); -- foreign key
+CREATE TABLE logged3(f1 SERIAL PRIMARY KEY, f2 INTEGER REFERENCES logged3); -- self-referencing foreign key
+ALTER TABLE logged1 SET UNLOGGED; -- fails because a foreign key from a permanent table exists
+ALTER TABLE logged3 SET UNLOGGED; -- skip self-referencing foreign key
+ALTER TABLE logged2 SET UNLOGGED;
+ALTER TABLE logged1 SET UNLOGGED;
+-- check relpersistence of a permanent table after changing to unlogged
+SELECT relname, relkind, relpersistence FROM pg_class WHERE relname ~ '^logged1'
+UNION ALL
+SELECT 'toast table', t.relkind, t.relpersistence FROM pg_class r JOIN pg_class t ON t.oid = r.reltoastrelid WHERE r.relname ~ '^logged1'
+UNION ALL
+SELECT 'toast index', ri.relkind, ri.relpersistence FROM pg_class r join pg_class t ON t.oid = r.reltoastrelid JOIN pg_index i ON i.indrelid = t.oid JOIN pg_class ri ON ri.oid = i.indexrelid WHERE r.relname ~ '^logged1'
+ORDER BY relname;
+ALTER TABLE logged1 SET UNLOGGED; -- silently do nothing
+DROP TABLE logged3;
+DROP TABLE logged2;
+DROP TABLE logged1;

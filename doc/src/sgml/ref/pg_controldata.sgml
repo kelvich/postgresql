@@ -4,6 +4,10 @@ PostgreSQL documentation
 -->
 
 <refentry id="APP-PGCONTROLDATA">
+ <indexterm zone="app-pgcontroldata">
+  <primary>pg_controldata</primary>
+ </indexterm>
+
  <refmeta>
   <refentrytitle><application>pg_controldata</application></refentrytitle>
   <manvolnum>1</manvolnum>
@@ -15,15 +19,11 @@ PostgreSQL documentation
   <refpurpose>display control information of a <productname>PostgreSQL</productname> database cluster</refpurpose>
  </refnamediv>
 
- <indexterm zone="app-pgcontroldata">
-  <primary>pg_controldata</primary>
- </indexterm>
-
  <refsynopsisdiv>
   <cmdsynopsis>
    <command>pg_controldata</command>
    <arg choice="opt"><replaceable class="parameter">option</replaceable></arg>
-   <arg choice="opt"><replaceable class="parameter">datadir</replaceable></arg>
+   <arg choice="opt"><arg choice="opt"><option>-D</option></arg> <replaceable class="parameter">datadir</replaceable></arg>
   </cmdsynopsis>
  </refsynopsisdiv>
 

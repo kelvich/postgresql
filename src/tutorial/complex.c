@@ -12,7 +12,6 @@
 #include "fmgr.h"
 #include "libpq/pqformat.h"		/* needed for send/recv functions */
 
-
 PG_MODULE_MAGIC;
 
 typedef struct Complex
@@ -139,7 +138,7 @@ complex_add(PG_FUNCTION_ARGS)
  * It's essential that the comparison operators and support function for a
  * B-tree index opclass always agree on the relative ordering of any two
  * data values.  Experience has shown that it's depressingly easy to write
- * unintentionally inconsistent functions.	One way to reduce the odds of
+ * unintentionally inconsistent functions.  One way to reduce the odds of
  * making a mistake is to make all the functions simple wrappers around
  * an internal three-way-comparison function, as we do here.
  *****************************************************************************/

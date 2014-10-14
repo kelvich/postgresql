@@ -1161,28 +1161,18 @@ include $(PGXS)
     or on the <literal>make</literal> command line.
    </para>
 
-   <caution>
-    <para>
-     Changing <varname>PG_CONFIG</varname> only works when building
-     against <productname>PostgreSQL</productname> 8.3 or later.
-     With older releases it does not work to set it to anything except
-     <literal>pg_config</>; you must alter your <varname>PATH</>
-     to select the installation to build against.
-    </para>
-   </caution>
-
    <para>
     You can also run <literal>make</literal> in a directory outside the source
     tree of your extension, if you want to keep the build directory separate.
     This procedure is also called a
     <indexterm><primary>VPATH</primary></indexterm><firstterm>VPATH</firstterm>
     build.  Here's how:
-    <screen>
-      <userinput>mkdir build_dir</userinput>
-      <userinput>cd build_dir</userinput>
-      <userinput>make -f /path/to/extension/source/tree/Makefile</userinput>
-      <userinput>make -f /path/to/extension/source/tree/Makefile install</userinput>
-    </screen>
+<programlisting>
+mkdir build_dir
+cd build_dir
+make -f /path/to/extension/source/tree/Makefile
+make -f /path/to/extension/source/tree/Makefile install
+</programlisting>
    </para>
 
    <para>
@@ -1191,10 +1181,10 @@ include $(PGXS)
     core script <filename>config/prep_buildtree</>. Once this has been done
     you can build by setting the <literal>make</literal> variable
     <varname>USE_VPATH</varname> like this:
-    <screen>
-      <userinput>make USE_VPATH=/path/to/extension/source/tree</userinput>
-      <userinput>make USE_VPATH=/path/to/extension/source/tree install</userinput>
-    </screen>
+<programlisting>
+make USE_VPATH=/path/to/extension/source/tree
+make USE_VPATH=/path/to/extension/source/tree install
+</programlisting>
     This procedure can work with a greater variety of directory layouts.
    </para>
 

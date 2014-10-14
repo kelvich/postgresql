@@ -270,7 +270,7 @@ ConnectionUp(void)
  * see if it can be restored.
  *
  * Returns true if either the connection was still there, or it could be
- * restored successfully; false otherwise.	If, however, there was no
+ * restored successfully; false otherwise.  If, however, there was no
  * connection and the session is non-interactive, this will exit the program
  * with a code of EXIT_BADCONN.
  */
@@ -497,6 +497,102 @@ PSQLexec(const char *query, bool start_xact)
 }
 
 
+/*
+ * PSQLexecWatch
+ *
+ * This function is used for \watch command to send the query to
+ * the server and print out the results.
+ *
+ * Returns 1 if the query executed successfully, 0 if it cannot be repeated,
+ * e.g., because of the interrupt, -1 on error.
+ */
+int
+PSQLexecWatch(const char *query, const printQueryOpt *opt)
+{
+	PGresult   *res;
+	double	elapsed_msec = 0;
+	instr_time	before;
+	instr_time	after;
+
+	if (!pset.db)
+	{
+		psql_error("You are currently not connected to a database.\n");
+		return 0;
+	}
+
+	SetCancelConn();
+
+	if (pset.timing)
+		INSTR_TIME_SET_CURRENT(before);
+
+	res = PQexec(pset.db, query);
+
+	ResetCancelConn();
+
+	if (!AcceptResult(res))
+	{
+		PQclear(res);
+		return 0;
+	}
+
+	if (pset.timing)
+	{
+		INSTR_TIME_SET_CURRENT(after);
+		INSTR_TIME_SUBTRACT(after, before);
+		elapsed_msec = INSTR_TIME_GET_MILLISEC(after);
+	}
+
+	/*
+	 * If SIGINT is sent while the query is processing, the interrupt
+	 * will be consumed.  The user's intention, though, is to cancel
+	 * the entire watch process, so detect a sent cancellation request and
+	 * exit in this case.
+	 */
+	if (cancel_pressed)
+	{
+		PQclear(res);
+		return 0;
+	}
+
+	switch (PQresultStatus(res))
+	{
+		case PGRES_TUPLES_OK:
+			printQuery(res, opt, pset.queryFout, pset.logfile);
+			break;
+
+		case PGRES_COMMAND_OK:
+			fprintf(pset.queryFout, "%s\n%s\n\n", opt->title, PQcmdStatus(res));
+			break;
+
+		case PGRES_EMPTY_QUERY:
+			psql_error(_("\\watch cannot be used with an empty query\n"));
+			PQclear(res);
+			return -1;
+
+		case PGRES_COPY_OUT:
+		case PGRES_COPY_IN:
+		case PGRES_COPY_BOTH:
+			psql_error(_("\\watch cannot be used with COPY\n"));
+			PQclear(res);
+			return -1;
+
+		default:
+			psql_error(_("unexpected result status for \\watch\n"));
+			PQclear(res);
+			return -1;
+	}
+
+	PQclear(res);
+
+	fflush(pset.queryFout);
+
+	/* Possible microtiming output */
+	if (pset.timing)
+		printf(_("Time: %.3f ms\n"), elapsed_msec);
+
+	return 1;
+}
+
 
 /*
  * PrintNotifications: check for asynchronous notifications, and print them out
@@ -628,11 +724,13 @@ StoreQueryTuple(const PGresult *result)
  * command.  In that event, we'll marshal data for the COPY and then cycle
  * through any subsequent PGresult objects.
  *
- * When the command string contained no affected COPY command, this function
+ * When the command string contained no such COPY command, this function
  * degenerates to an AcceptResult() call.
  *
  * Changes its argument to point to the last PGresult of the command string,
- * or NULL if that result was for a COPY FROM STDIN or COPY TO STDOUT.
+ * or NULL if that result was for a COPY TO STDOUT.  (Returning NULL prevents
+ * the command status from being printed, which we want in that case so that
+ * the status line doesn't get taken as part of the COPY data.)
  *
  * Returns true on complete success, false otherwise.  Possible failure modes
  * include purely client-side problems; check the transaction status for the
@@ -641,14 +739,14 @@ StoreQueryTuple(const PGresult *result)
 static bool
 ProcessResult(PGresult **results)
 {
-	PGresult   *next_result;
 	bool		success = true;
 	bool		first_cycle = true;
 
-	do
+	for (;;)
 	{
 		ExecStatusType result_status;
 		bool		is_copy;
+		PGresult   *next_result;
 
 		if (!AcceptResult(*results))
 		{
@@ -688,35 +786,70 @@ ProcessResult(PGresult **results)
 			 * Marshal the COPY data.  Either subroutine will get the
 			 * connection out of its COPY state, then call PQresultStatus()
 			 * once and report any error.
+			 *
+			 * If pset.copyStream is set, use that as data source/sink,
+			 * otherwise use queryFout or cur_cmd_source as appropriate.
 			 */
+			FILE	   *copystream = pset.copyStream;
+			PGresult   *copy_result;
+
 			SetCancelConn();
 			if (result_status == PGRES_COPY_OUT)
-				success = handleCopyOut(pset.db, pset.queryFout) && success;
+			{
+				if (!copystream)
+					copystream = pset.queryFout;
+				success = handleCopyOut(pset.db,
+										copystream,
+										&copy_result) && success;
+
+				/*
+				 * Suppress status printing if the report would go to the same
+				 * place as the COPY data just went.  Note this doesn't
+				 * prevent error reporting, since handleCopyOut did that.
+				 */
+				if (copystream == pset.queryFout)
+				{
+					PQclear(copy_result);
+					copy_result = NULL;
+				}
+			}
 			else
-				success = handleCopyIn(pset.db, pset.cur_cmd_source,
-									   PQbinaryTuples(*results)) && success;
+			{
+				if (!copystream)
+					copystream = pset.cur_cmd_source;
+				success = handleCopyIn(pset.db,
+									   copystream,
+									   PQbinaryTuples(*results),
+									   &copy_result) && success;
+			}
 			ResetCancelConn();
 
 			/*
-			 * Call PQgetResult() once more.  In the typical case of a
-			 * single-command string, it will return NULL.	Otherwise, we'll
-			 * have other results to process that may include other COPYs.
+			 * Replace the PGRES_COPY_OUT/IN result with COPY command's exit
+			 * status, or with NULL if we want to suppress printing anything.
 			 */
 			PQclear(*results);
-			*results = next_result = PQgetResult(pset.db);
+			*results = copy_result;
 		}
 		else if (first_cycle)
+		{
 			/* fast path: no COPY commands; PQexec visited all results */
 			break;
-		else if ((next_result = PQgetResult(pset.db)))
-		{
-			/* non-COPY command(s) after a COPY: keep the last one */
-			PQclear(*results);
-			*results = next_result;
 		}
 
+		/*
+		 * Check PQgetResult() again.  In the typical case of a single-command
+		 * string, it will return NULL.  Otherwise, we'll have other results
+		 * to process that may include other COPYs.  We keep the last result.
+		 */
+		next_result = PQgetResult(pset.db);
+		if (!next_result)
+			break;
+
+		PQclear(*results);
+		*results = next_result;
 		first_cycle = false;
-	} while (next_result);
+	}
 
 	/* may need this to recover from conn loss during COPY */
 	if (!first_cycle && !CheckConnection())
@@ -957,6 +1090,9 @@ SendQuery(const char *query)
 		ResetCancelConn();
 		results = NULL;			/* PQclear(NULL) does nothing */
 	}
+
+	if (!OK && pset.echo == PSQL_ECHO_ERRORS)
+		psql_error("STATEMENT:  %s\n", query);
 
 	/* If we made a temporary savepoint, possibly release/rollback */
 	if (on_error_rollback_savepoint)
@@ -1483,6 +1619,23 @@ command_no_begin(const char *query)
 			if (wordlen == 12 && pg_strncasecmp(query, "concurrently", 12) == 0)
 				return true;
 		}
+
+		return false;
+	}
+
+	if (wordlen == 5 && pg_strncasecmp(query, "alter", 5) == 0)
+	{
+		query += wordlen;
+
+		query = skip_white_space(query);
+
+		wordlen = 0;
+		while (isalpha((unsigned char) query[wordlen]))
+			wordlen += PQmblen(&query[wordlen], pset.encoding);
+
+		/* ALTER SYSTEM isn't allowed in xacts */
+		if (wordlen == 6 && pg_strncasecmp(query, "system", 6) == 0)
+			return true;
 
 		return false;
 	}

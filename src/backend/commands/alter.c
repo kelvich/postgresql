@@ -43,6 +43,7 @@
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
+#include "commands/policy.h"
 #include "commands/proclang.h"
 #include "commands/schemacmds.h"
 #include "commands/tablecmds.h"
@@ -296,7 +297,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 }
 
 /*
- * Executes an ALTER OBJECT / RENAME TO statement.	Based on the object
+ * Executes an ALTER OBJECT / RENAME TO statement.  Based on the object
  * type, the function appropriate to that type is executed.
  */
 Oid
@@ -337,6 +338,9 @@ ExecRenameStmt(RenameStmt *stmt)
 
 		case OBJECT_TRIGGER:
 			return renametrig(stmt);
+
+		case OBJECT_POLICY:
+			return rename_policy(stmt);
 
 		case OBJECT_DOMAIN:
 		case OBJECT_TYPE:

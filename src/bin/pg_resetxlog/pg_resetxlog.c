@@ -31,7 +31,7 @@
 /*
  * We have to use postgres.h not postgres_fe.h here, because there's so much
  * backend-only stuff in the XLOG include files we need.  But we need a
- * frontend-ish environment otherwise.	Hence this ugly hack.
+ * frontend-ish environment otherwise.  Hence this ugly hack.
  */
 #define FRONTEND 1
 
@@ -44,9 +44,6 @@
 #include <sys/time.h>
 #include <time.h>
 #include <unistd.h>
-#ifdef HAVE_GETOPT_H
-#include <getopt.h>
-#endif
 
 #include "access/transam.h"
 #include "access/tuptoaster.h"
@@ -55,9 +52,8 @@
 #include "catalog/catversion.h"
 #include "catalog/pg_control.h"
 #include "common/fe_memutils.h"
-
-extern int	optind;
-extern char *optarg;
+#include "storage/large_object.h"
+#include "pg_getopt.h"
 
 
 static ControlFileData ControlFile;		/* pg_control values */
@@ -93,7 +89,7 @@ main(int argc, char *argv[])
 	MultiXactId set_oldestmxid = 0;
 	char	   *endptr;
 	char	   *endptr2;
-	char	   *DataDir;
+	char	   *DataDir = NULL;
 	int			fd;
 
 	set_pglocale_pgservice(argv[0], PG_TEXTDOMAIN("pg_resetxlog"));
@@ -115,10 +111,14 @@ main(int argc, char *argv[])
 	}
 
 
-	while ((c = getopt(argc, argv, "fl:m:no:O:x:e:")) != -1)
+	while ((c = getopt(argc, argv, "D:fl:m:no:O:x:e:")) != -1)
 	{
 		switch (c)
 		{
+			case 'D':
+				DataDir = optarg;
+				break;
+
 			case 'f':
 				force = true;
 				break;
@@ -237,12 +237,14 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (optind == argc)
+	if (DataDir == NULL && optind == argc)
 	{
 		fprintf(stderr, _("%s: no data directory specified\n"), progname);
 		fprintf(stderr, _("Try \"%s --help\" for more information.\n"), progname);
 		exit(1);
 	}
+	if (DataDir == NULL)
+		DataDir = argv[optind];
 
 	/*
 	 * Don't allow pg_resetxlog to be run as root, to avoid overwriting the
@@ -260,8 +262,6 @@ main(int argc, char *argv[])
 		exit(1);
 	}
 #endif
-
-	DataDir = argv[optind];
 
 	if (chdir(DataDir) < 0)
 	{
@@ -497,7 +497,8 @@ GuessControlValues(void)
 	 */
 	gettimeofday(&tv, NULL);
 	sysidentifier = ((uint64) tv.tv_sec) << 32;
-	sysidentifier |= (uint32) (tv.tv_sec | tv.tv_usec);
+	sysidentifier |= ((uint64) tv.tv_usec) << 12;
+	sysidentifier |= getpid() & 0xFFF;
 
 	ControlFile.system_identifier = sysidentifier;
 
@@ -540,6 +541,7 @@ GuessControlValues(void)
 	ControlFile.nameDataLen = NAMEDATALEN;
 	ControlFile.indexMaxKeys = INDEX_MAX_KEYS;
 	ControlFile.toast_max_chunk_size = TOAST_MAX_CHUNK_SIZE;
+	ControlFile.loblksize = LOBLKSIZE;
 #ifdef HAVE_INT64_TIMESTAMP
 	ControlFile.enableIntTimes = true;
 #else
@@ -624,6 +626,8 @@ PrintControlValues(bool guessed)
 		   ControlFile.indexMaxKeys);
 	printf(_("Maximum size of a TOAST chunk:        %u\n"),
 		   ControlFile.toast_max_chunk_size);
+	printf(_("Size of a large-object chunk:         %u\n"),
+		   ControlFile.loblksize);
 	printf(_("Date/time type storage:               %s\n"),
 		   (ControlFile.enableIntTimes ? _("64-bit integers") : _("floating-point numbers")));
 	printf(_("Float4 argument passing:              %s\n"),
@@ -683,7 +687,7 @@ PrintNewControlValues()
 
 	if (set_xid_epoch != -1)
 	{
-		printf(_("NextXID Epoch:                        %u\n"),
+		printf(_("NextXID epoch:                        %u\n"),
 			   ControlFile.checkPointCopy.nextXidEpoch);
 	}
 }
@@ -807,7 +811,7 @@ FindEndOfXLOG(void)
 
 	/*
 	 * Initialize the max() computation using the last checkpoint address from
-	 * old pg_control.	Note that for the moment we are working with segment
+	 * old pg_control.  Note that for the moment we are working with segment
 	 * numbering according to the old xlog seg size.
 	 */
 	segs_per_xlogid = (UINT64CONST(0x0000000100000000) / ControlFile.xlog_seg_size);
@@ -826,8 +830,7 @@ FindEndOfXLOG(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strlen(xlde->d_name) == 24 &&
 			strspn(xlde->d_name, "0123456789ABCDEF") == 24)
@@ -849,25 +852,21 @@ FindEndOfXLOG(void)
 			if (segno > newXlogSegNo)
 				newXlogSegNo = segno;
 		}
-		errno = 0;
 	}
-#ifdef WIN32
-
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
-	if (GetLastError() == ERROR_NO_MORE_FILES)
-		errno = 0;
-#endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, XLOGDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, XLOGDIR, strerror(errno));
+		exit(1);
+	}
 
 	/*
 	 * Finally, convert to new xlog seg size, and advance by one to ensure we
@@ -897,8 +896,7 @@ KillExistingXLOG(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strlen(xlde->d_name) == 24 &&
 			strspn(xlde->d_name, "0123456789ABCDEF") == 24)
@@ -911,25 +909,21 @@ KillExistingXLOG(void)
 				exit(1);
 			}
 		}
-		errno = 0;
 	}
-#ifdef WIN32
-
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
-	if (GetLastError() == ERROR_NO_MORE_FILES)
-		errno = 0;
-#endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, XLOGDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, XLOGDIR, strerror(errno));
+		exit(1);
+	}
 }
 
 
@@ -953,8 +947,7 @@ KillExistingArchiveStatus(void)
 		exit(1);
 	}
 
-	errno = 0;
-	while ((xlde = readdir(xldir)) != NULL)
+	while (errno = 0, (xlde = readdir(xldir)) != NULL)
 	{
 		if (strspn(xlde->d_name, "0123456789ABCDEF") == 24 &&
 			(strcmp(xlde->d_name + 24, ".ready") == 0 ||
@@ -968,25 +961,21 @@ KillExistingArchiveStatus(void)
 				exit(1);
 			}
 		}
-		errno = 0;
 	}
-#ifdef WIN32
-
-	/*
-	 * This fix is in mingw cvs (runtime/mingwex/dirent.c rev 1.4), but not in
-	 * released version
-	 */
-	if (GetLastError() == ERROR_NO_MORE_FILES)
-		errno = 0;
-#endif
 
 	if (errno)
 	{
-		fprintf(stderr, _("%s: could not read from directory \"%s\": %s\n"),
+		fprintf(stderr, _("%s: could not read directory \"%s\": %s\n"),
 				progname, ARCHSTATDIR, strerror(errno));
 		exit(1);
 	}
-	closedir(xldir);
+
+	if (closedir(xldir))
+	{
+		fprintf(stderr, _("%s: could not close directory \"%s\": %s\n"),
+				progname, ARCHSTATDIR, strerror(errno));
+		exit(1);
+	}
 }
 
 
@@ -1092,7 +1081,7 @@ static void
 usage(void)
 {
 	printf(_("%s resets the PostgreSQL transaction log.\n\n"), progname);
-	printf(_("Usage:\n  %s [OPTION]... DATADIR\n\n"), progname);
+	printf(_("Usage:\n  %s [OPTION]... {[-D] DATADIR}\n\n"), progname);
 	printf(_("Options:\n"));
 	printf(_("  -e XIDEPOCH      set next transaction ID epoch\n"));
 	printf(_("  -f               force update to be done\n"));

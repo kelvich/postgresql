@@ -186,13 +186,13 @@ get_opfamily_member(Oid opfamily, Oid lefttype, Oid righttype,
  * (This indicates that the operator is not a valid ordering operator.)
  *
  * Note: the operator could be registered in multiple families, for example
- * if someone were to build a "reverse sort" opfamily.	This would result in
+ * if someone were to build a "reverse sort" opfamily.  This would result in
  * uncertainty as to whether "ORDER BY USING op" would default to NULLS FIRST
  * or NULLS LAST, as well as inefficient planning due to failure to match up
  * pathkeys that should be the same.  So we want a determinate result here.
  * Because of the way the syscache search works, we'll use the interpretation
  * associated with the opfamily with smallest OID, which is probably
- * determinate enough.	Since there is no longer any particularly good reason
+ * determinate enough.  Since there is no longer any particularly good reason
  * to build reverse-sort opfamilies, it doesn't seem worth expending any
  * additional effort on ensuring consistency.
  */
@@ -243,62 +243,6 @@ get_ordering_op_properties(Oid opno,
 	ReleaseSysCacheList(catlist);
 
 	return result;
-}
-
-/*
- * get_sort_function_for_ordering_op
- *		Get the OID of the datatype-specific btree sort support function,
- *		or if there is none, the btree comparison function,
- *		associated with an ordering operator (a "<" or ">" operator).
- *
- * *sortfunc receives the support or comparison function OID.
- * *issupport is set TRUE if it's a support func, FALSE if a comparison func.
- * *reverse is set FALSE if the operator is "<", TRUE if it's ">"
- * (indicating that comparison results must be negated before use).
- *
- * Returns TRUE if successful, FALSE if no btree function can be found.
- * (This indicates that the operator is not a valid ordering operator.)
- */
-bool
-get_sort_function_for_ordering_op(Oid opno, Oid *sortfunc,
-								  bool *issupport, bool *reverse)
-{
-	Oid			opfamily;
-	Oid			opcintype;
-	int16		strategy;
-
-	/* Find the operator in pg_amop */
-	if (get_ordering_op_properties(opno,
-								   &opfamily, &opcintype, &strategy))
-	{
-		/* Found a suitable opfamily, get matching support function */
-		*sortfunc = get_opfamily_proc(opfamily,
-									  opcintype,
-									  opcintype,
-									  BTSORTSUPPORT_PROC);
-		if (OidIsValid(*sortfunc))
-			*issupport = true;
-		else
-		{
-			/* opfamily doesn't provide sort support, get comparison func */
-			*sortfunc = get_opfamily_proc(opfamily,
-										  opcintype,
-										  opcintype,
-										  BTORDER_PROC);
-			if (!OidIsValid(*sortfunc)) /* should not happen */
-				elog(ERROR, "missing support function %d(%u,%u) in opfamily %u",
-					 BTORDER_PROC, opcintype, opcintype, opfamily);
-			*issupport = false;
-		}
-		*reverse = (strategy == BTGreaterStrategyNumber);
-		return true;
-	}
-
-	/* ensure outputs are set on failure */
-	*sortfunc = InvalidOid;
-	*issupport = false;
-	*reverse = false;
-	return false;
 }
 
 /*
@@ -403,7 +347,7 @@ get_ordering_op_for_equality_op(Oid opno, bool use_lhs_type)
  *
  * The planner currently uses simple equal() tests to compare the lists
  * returned by this function, which makes the list order relevant, though
- * strictly speaking it should not be.	Because of the way syscache list
+ * strictly speaking it should not be.  Because of the way syscache list
  * searches are handled, in normal operation the result will be sorted by OID
  * so everything works fine.  If running with system index usage disabled,
  * the result ordering is unspecified and hence the planner might fail to
@@ -1212,7 +1156,7 @@ op_mergejoinable(Oid opno, Oid inputtype)
  *
  * In some cases (currently only array_eq), hashjoinability depends on the
  * specific input data type the operator is invoked for, so that must be
- * passed as well.	We currently assume that only one input's type is needed
+ * passed as well.  We currently assume that only one input's type is needed
  * to check this --- by convention, pass the left input's data type.
  */
 bool
@@ -1880,7 +1824,7 @@ get_typbyval(Oid typid)
  *		A two-fer: given the type OID, return both typlen and typbyval.
  *
  *		Since both pieces of info are needed to know how to copy a Datum,
- *		many places need both.	Might as well get them with one cache lookup
+ *		many places need both.  Might as well get them with one cache lookup
  *		instead of two.  Also, this routine raises an error instead of
  *		returning a bogus value when given a bad type OID.
  */

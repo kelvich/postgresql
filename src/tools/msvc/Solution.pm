@@ -15,14 +15,14 @@ sub _new
 	my $classname = shift;
 	my $options   = shift;
 	my $self      = {
-		projects => {},
-		options  => $options,
-		numver   => '',
-		strver   => '',
-		VisualStudioVersion => undef,
+		projects                   => {},
+		options                    => $options,
+		numver                     => '',
+		strver                     => '',
+		VisualStudioVersion        => undef,
 		MinimumVisualStudioVersion => undef,
-		vcver    => undef,
-		platform => undef, };
+		vcver                      => undef,
+		platform                   => undef, };
 	bless($self, $classname);
 
 	# integer_datetimes is now the default
@@ -162,11 +162,13 @@ sub GenerateFiles
 		  || confess "Could not open pg_config.h.win32\n";
 		open(O, ">src\\include\\pg_config.h")
 		  || confess "Could not write to pg_config.h\n";
+		my $extraver = $self->{options}->{extraver};
+		$extraver = '' unless defined $extraver;
 		while (<I>)
 		{
-			s{PG_VERSION "[^"]+"}{PG_VERSION "$self->{strver}"};
+			s{PG_VERSION "[^"]+"}{PG_VERSION "$self->{strver}$extraver"};
 			s{PG_VERSION_NUM \d+}{PG_VERSION_NUM $self->{numver}};
-s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY(z)\n#define PG_VERSION_STR "PostgreSQL $self->{strver}, compiled by Visual C++ build " __STRINGIFY2(_MSC_VER) ", $bits-bit"};
+			s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY(z)\n#define PG_VERSION_STR "PostgreSQL $self->{strver}$extraver, compiled by Visual C++ build " __STRINGIFY2(_MSC_VER) ", $bits-bit"};
 			print O;
 		}
 		print O "#define PG_MAJORVERSION \"$self->{majorver}\"\n";
@@ -180,7 +182,7 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 		  if ($self->{options}->{integer_datetimes});
 		print O "#define USE_LDAP 1\n"   if ($self->{options}->{ldap});
 		print O "#define HAVE_LIBZ 1\n"  if ($self->{options}->{zlib});
-		print O "#define USE_SSL 1\n"    if ($self->{options}->{openssl});
+		print O "#define USE_OPENSSL 1\n" if ($self->{options}->{openssl});
 		print O "#define ENABLE_NLS 1\n" if ($self->{options}->{nls});
 
 		print O "#define BLCKSZ ", 1024 * $self->{options}->{blocksize}, "\n";
@@ -214,6 +216,7 @@ s{PG_VERSION_STR "[^"]+"}{__STRINGIFY(x) #x\n#define __STRINGIFY2(z) __STRINGIFY
 
 		if ($self->{options}->{uuid})
 		{
+			print O "#define HAVE_UUID_OSSP\n";
 			print O "#define HAVE_UUID_H\n";
 		}
 		if ($self->{options}->{xml})
@@ -419,7 +422,7 @@ EOF
 	}
 
 	my $mf = Project::read_file('src\backend\catalog\Makefile');
-	$mf =~ s{\\s*[\r\n]+}{}mg;
+	$mf =~ s{\\\r?\n}{}g;
 	$mf =~ /^POSTGRES_BKI_SRCS\s*:?=[^,]+,(.*)\)$/gm
 	  || croak "Could not find POSTGRES_BKI_SRCS in Makefile\n";
 	my @allbki = split /\s+/, $1;
@@ -505,10 +508,8 @@ sub AddProject
 	{
 		$proj->AddIncludeDir($self->{options}->{gss} . '\inc\krb5');
 		$proj->AddLibrary($self->{options}->{gss} . '\lib\i386\krb5_32.lib');
-		$proj->AddLibrary(
-			$self->{options}->{gss} . '\lib\i386\comerr32.lib');
-		$proj->AddLibrary(
-			$self->{options}->{gss} . '\lib\i386\gssapi32.lib');
+		$proj->AddLibrary($self->{options}->{gss} . '\lib\i386\comerr32.lib');
+		$proj->AddLibrary($self->{options}->{gss} . '\lib\i386\gssapi32.lib');
 	}
 	if ($self->{options}->{iconv})
 	{
@@ -626,14 +627,15 @@ sub GetFakeConfigure
 	$cfg .= ' --enable-nls' if ($self->{options}->{nls});
 	$cfg .= ' --with-ldap'  if ($self->{options}->{ldap});
 	$cfg .= ' --without-zlib' unless ($self->{options}->{zlib});
-	$cfg .= ' --with-openssl'   if ($self->{options}->{ssl});
-	$cfg .= ' --with-ossp-uuid' if ($self->{options}->{uuid});
-	$cfg .= ' --with-libxml'    if ($self->{options}->{xml});
-	$cfg .= ' --with-libxslt'   if ($self->{options}->{xslt});
-	$cfg .= ' --with-gssapi'    if ($self->{options}->{gss});
-	$cfg .= ' --with-tcl'       if ($self->{options}->{tcl});
-	$cfg .= ' --with-perl'      if ($self->{options}->{perl});
-	$cfg .= ' --with-python'    if ($self->{options}->{python});
+	$cfg .= ' --with-extra-version' if ($self->{options}->{extraver});
+	$cfg .= ' --with-openssl'       if ($self->{options}->{openssl});
+	$cfg .= ' --with-ossp-uuid'     if ($self->{options}->{uuid});
+	$cfg .= ' --with-libxml'        if ($self->{options}->{xml});
+	$cfg .= ' --with-libxslt'       if ($self->{options}->{xslt});
+	$cfg .= ' --with-gssapi'        if ($self->{options}->{gss});
+	$cfg .= ' --with-tcl'           if ($self->{options}->{tcl});
+	$cfg .= ' --with-perl'          if ($self->{options}->{perl});
+	$cfg .= ' --with-python'        if ($self->{options}->{python});
 
 	return $cfg;
 }
@@ -752,8 +754,8 @@ sub new
 	$self->{solutionFileVersion}        = '12.00';
 	$self->{vcver}                      = '12.00';
 	$self->{visualStudioName}           = 'Visual Studio 2013';
-	$self->{VisualStudioVersion}        = '12.0.21005.1',
-	$self->{MinimumVisualStudioVersion} = '10.0.40219.1',
+	$self->{VisualStudioVersion}        = '12.0.21005.1';
+	$self->{MinimumVisualStudioVersion} = '10.0.40219.1';
 
 	return $self;
 }

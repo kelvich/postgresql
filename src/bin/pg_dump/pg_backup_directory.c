@@ -32,10 +32,11 @@
  *
  *-------------------------------------------------------------------------
  */
+#include "postgres_fe.h"
 
 #include "compress_io.h"
-#include "pg_backup_utils.h"
 #include "parallel.h"
+#include "pg_backup_utils.h"
 
 #include <dirent.h>
 #include <sys/stat.h>
@@ -66,12 +67,12 @@ static const char *modulename = gettext_noop("directory archiver");
 static void _ArchiveEntry(ArchiveHandle *AH, TocEntry *te);
 static void _StartData(ArchiveHandle *AH, TocEntry *te);
 static void _EndData(ArchiveHandle *AH, TocEntry *te);
-static size_t _WriteData(ArchiveHandle *AH, const void *data, size_t dLen);
+static void _WriteData(ArchiveHandle *AH, const void *data, size_t dLen);
 static int	_WriteByte(ArchiveHandle *AH, const int i);
 static int	_ReadByte(ArchiveHandle *);
-static size_t _WriteBuf(ArchiveHandle *AH, const void *buf, size_t len);
-static size_t _ReadBuf(ArchiveHandle *AH, void *buf, size_t len);
-static void _CloseArchive(ArchiveHandle *AH);
+static void _WriteBuf(ArchiveHandle *AH, const void *buf, size_t len);
+static void _ReadBuf(ArchiveHandle *AH, void *buf, size_t len);
+static void _CloseArchive(ArchiveHandle *AH, DumpOptions *dopt);
 static void _ReopenArchive(ArchiveHandle *AH);
 static void _PrintTocData(ArchiveHandle *AH, TocEntry *te, RestoreOptions *ropt);
 
@@ -92,7 +93,7 @@ static char *_MasterStartParallelItem(ArchiveHandle *AH, TocEntry *te, T_Action 
 static int _MasterEndParallelItem(ArchiveHandle *AH, TocEntry *te,
 					   const char *str, T_Action act);
 static char *_WorkerJobRestoreDirectory(ArchiveHandle *AH, TocEntry *te);
-static char *_WorkerJobDumpDirectory(ArchiveHandle *AH, TocEntry *te);
+static char *_WorkerJobDumpDirectory(ArchiveHandle *AH, DumpOptions *dopt, TocEntry *te);
 
 static void setFilePath(ArchiveHandle *AH, char *buf,
 			const char *relativeFilename);
@@ -177,7 +178,7 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 				struct dirent *d;
 
 				is_empty = true;
-				while ((d = readdir(dir)))
+				while (errno = 0, (d = readdir(dir)))
 				{
 					if (strcmp(d->d_name, ".") != 0 && strcmp(d->d_name, "..") != 0)
 					{
@@ -185,7 +186,14 @@ InitArchiveFmt_Directory(ArchiveHandle *AH)
 						break;
 					}
 				}
-				closedir(dir);
+
+				if (errno)
+					exit_horribly(modulename, "could not read directory \"%s\": %s\n",
+								  ctx->directory, strerror(errno));
+
+				if (closedir(dir))
+					exit_horribly(modulename, "could not close directory \"%s\": %s\n",
+								  ctx->directory, strerror(errno));
 			}
 		}
 
@@ -343,18 +351,18 @@ _StartData(ArchiveHandle *AH, TocEntry *te)
  *
  * We write the data to the open data file.
  */
-static size_t
+static void
 _WriteData(ArchiveHandle *AH, const void *data, size_t dLen)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 
-	if (dLen == 0)
-		return 0;
-
 	/* Are we aborting? */
 	checkAborting(AH);
 
-	return cfwrite(data, dLen, ctx->dataFH);
+	if (dLen > 0 && cfwrite(data, dLen, ctx->dataFH) != dLen)
+		WRITE_ERROR_EXIT;
+
+	return;
 }
 
 /*
@@ -452,6 +460,7 @@ _LoadBlobs(ArchiveHandle *AH, RestoreOptions *ropt)
 		char		fname[MAXPGPATH];
 		char		path[MAXPGPATH];
 
+		/* Can't overflow because line and fname are the same length. */
 		if (sscanf(line, "%u %s\n", &oid, fname) != 2)
 			exit_horribly(modulename, "invalid line in large object TOC file \"%s\": \"%s\"\n",
 						  fname, line);
@@ -487,7 +496,7 @@ _WriteByte(ArchiveHandle *AH, const int i)
 	lclContext *ctx = (lclContext *) AH->formatData;
 
 	if (cfwrite(&c, 1, ctx->dataFH) != 1)
-		exit_horribly(modulename, "could not write byte\n");
+		WRITE_ERROR_EXIT;
 
 	return 1;
 }
@@ -502,34 +511,26 @@ static int
 _ReadByte(ArchiveHandle *AH)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
-	int			res;
 
-	res = cfgetc(ctx->dataFH);
-	if (res == EOF)
-		exit_horribly(modulename, "unexpected end of file\n");
-
-	return res;
+	return cfgetc(ctx->dataFH);
 }
 
 /*
  * Write a buffer of data to the archive.
  * Called by the archiver to write a block of bytes to the TOC or a data file.
  */
-static size_t
+static void
 _WriteBuf(ArchiveHandle *AH, const void *buf, size_t len)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
-	size_t		res;
 
 	/* Are we aborting? */
 	checkAborting(AH);
 
-	res = cfwrite(buf, len, ctx->dataFH);
-	if (res != len)
-		exit_horribly(modulename, "could not write to output file: %s\n",
-					  strerror(errno));
+	if (cfwrite(buf, len, ctx->dataFH) != len)
+		WRITE_ERROR_EXIT;
 
-	return res;
+	return;
 }
 
 /*
@@ -537,15 +538,20 @@ _WriteBuf(ArchiveHandle *AH, const void *buf, size_t len)
  *
  * Called by the archiver to read a block of bytes from the archive
  */
-static size_t
+static void
 _ReadBuf(ArchiveHandle *AH, void *buf, size_t len)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
-	size_t		res;
 
-	res = cfread(buf, len, ctx->dataFH);
+	/*
+	 * If there was an I/O error, we already exited in cfread(), so here we
+	 * exit on short reads.
+	 */
+	if (cfread(buf, len, ctx->dataFH) != len)
+		exit_horribly(modulename,
+					  "could not read from input file: end of file\n");
 
-	return res;
+	return;
 }
 
 /*
@@ -561,7 +567,7 @@ _ReadBuf(ArchiveHandle *AH, void *buf, size_t len)
  *		WriteDataChunks		to save all DATA & BLOBs.
  */
 static void
-_CloseArchive(ArchiveHandle *AH)
+_CloseArchive(ArchiveHandle *AH, DumpOptions *dopt)
 {
 	lclContext *ctx = (lclContext *) AH->formatData;
 
@@ -573,7 +579,7 @@ _CloseArchive(ArchiveHandle *AH)
 		setFilePath(AH, fname, "toc.dat");
 
 		/* this will actually fork the processes for a parallel backup */
-		ctx->pstate = ParallelBackupStart(AH, NULL);
+		ctx->pstate = ParallelBackupStart(AH, dopt, NULL);
 
 		/* The TOC is always created uncompressed */
 		tocFH = cfopen_write(fname, PG_BINARY_W, 0);
@@ -594,7 +600,7 @@ _CloseArchive(ArchiveHandle *AH)
 		if (cfclose(tocFH) != 0)
 			exit_horribly(modulename, "could not close TOC file: %s\n",
 						  strerror(errno));
-		WriteDataChunks(AH, ctx->pstate);
+		WriteDataChunks(AH, dopt, ctx->pstate);
 
 		ParallelBackupEnd(AH, ctx->pstate);
 	}
@@ -785,7 +791,7 @@ _MasterStartParallelItem(ArchiveHandle *AH, TocEntry *te, T_Action act)
  * function of the respective dump format.
  */
 static char *
-_WorkerJobDumpDirectory(ArchiveHandle *AH, TocEntry *te)
+_WorkerJobDumpDirectory(ArchiveHandle *AH, DumpOptions *dopt, TocEntry *te)
 {
 	/*
 	 * short fixed-size string + some ID so far, this needs to be malloc'ed
@@ -804,7 +810,7 @@ _WorkerJobDumpDirectory(ArchiveHandle *AH, TocEntry *te)
 	 * succeed... A failure will be detected by the parent when the child dies
 	 * unexpectedly.
 	 */
-	WriteDataChunksForTocEntry(AH, te);
+	WriteDataChunksForTocEntry(AH, dopt, te);
 
 	snprintf(buf, buflen, "OK DUMP %d", te->dumpId);
 

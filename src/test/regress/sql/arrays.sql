@@ -459,3 +459,82 @@ insert into t1 (f1[5].q1) values(42);
 select * from t1;
 update t1 set f1[5].q2 = 43;
 select * from t1;
+
+-- Check that arrays of composites are safely detoasted when needed
+
+create temp table src (f1 text);
+insert into src
+  select string_agg(random()::text,'') from generate_series(1,10000);
+create type textandtext as (c1 text, c2 text);
+create temp table dest (f1 textandtext[]);
+insert into dest select array[row(f1,f1)::textandtext] from src;
+select length(md5((f1[1]).c2)) from dest;
+delete from src;
+select length(md5((f1[1]).c2)) from dest;
+truncate table src;
+drop table src;
+select length(md5((f1[1]).c2)) from dest;
+drop table dest;
+drop type textandtext;
+
+-- Tests for polymorphic-array form of width_bucket()
+
+-- this exercises the varwidth and float8 code paths
+SELECT
+    op,
+    width_bucket(op::numeric, ARRAY[1, 3, 5, 10.0]::numeric[]) AS wb_n1,
+    width_bucket(op::numeric, ARRAY[0, 5.5, 9.99]::numeric[]) AS wb_n2,
+    width_bucket(op::numeric, ARRAY[-6, -5, 2.0]::numeric[]) AS wb_n3,
+    width_bucket(op::float8, ARRAY[1, 3, 5, 10.0]::float8[]) AS wb_f1,
+    width_bucket(op::float8, ARRAY[0, 5.5, 9.99]::float8[]) AS wb_f2,
+    width_bucket(op::float8, ARRAY[-6, -5, 2.0]::float8[]) AS wb_f3
+FROM (VALUES
+  (-5.2),
+  (-0.0000000001),
+  (0.000000000001),
+  (1),
+  (1.99999999999999),
+  (2),
+  (2.00000000000001),
+  (3),
+  (4),
+  (4.5),
+  (5),
+  (5.5),
+  (6),
+  (7),
+  (8),
+  (9),
+  (9.99999999999999),
+  (10),
+  (10.0000000000001)
+) v(op);
+
+-- ensure float8 path handles NaN properly
+SELECT
+    op,
+    width_bucket(op, ARRAY[1, 3, 9, 'NaN', 'NaN']::float8[]) AS wb
+FROM (VALUES
+  (-5.2::float8),
+  (4::float8),
+  (77::float8),
+  ('NaN'::float8)
+) v(op);
+
+-- these exercise the generic fixed-width code path
+SELECT
+    op,
+    width_bucket(op, ARRAY[1, 3, 5, 10]) AS wb_1
+FROM generate_series(0,11) as op;
+
+SELECT width_bucket(now(),
+                    array['yesterday', 'today', 'tomorrow']::timestamptz[]);
+
+-- corner cases
+SELECT width_bucket(5, ARRAY[3]);
+SELECT width_bucket(5, '{}');
+
+-- error cases
+SELECT width_bucket('5'::text, ARRAY[3, 4]::integer[]);
+SELECT width_bucket(5, ARRAY[3, 4, NULL]);
+SELECT width_bucket(5, ARRAY[ARRAY[1, 2], ARRAY[3, 4]]);

@@ -12,7 +12,7 @@
  *
  * NOTES
  *	  Path and Plan nodes do not have any readfuncs support, because we
- *	  never have occasion to read them in.	(There was once code here that
+ *	  never have occasion to read them in.  (There was once code here that
  *	  claimed to read them, but it was broken as well as unused.)  We
  *	  never read executor state trees, either.
  *
@@ -34,7 +34,7 @@
 
 /*
  * Macros to simplify reading of different kinds of fields.  Use these
- * wherever possible to reduce the chance for silly typos.	Note that these
+ * wherever possible to reduce the chance for silly typos.  Note that these
  * hard-wire conventions about the names of the local variables in a Read
  * routine.
  */
@@ -130,7 +130,7 @@
 /*
  * NOTE: use atoi() to read values written with %d, or atoui() to read
  * values written with %u in outfuncs.c.  An exception is OID values,
- * for which use atooid().	(As of 7.1, outfuncs.c writes OIDs as %u,
+ * for which use atooid().  (As of 7.1, outfuncs.c writes OIDs as %u,
  * but this will probably change in the future.)
  */
 #define atoui(x)  ((unsigned int) strtoul((x), NULL, 10))
@@ -208,6 +208,7 @@ _readQuery(void)
 	READ_BOOL_FIELD(hasRecursive);
 	READ_BOOL_FIELD(hasModifyingCTE);
 	READ_BOOL_FIELD(hasForUpdate);
+	READ_BOOL_FIELD(hasRowSecurity);
 	READ_NODE_FIELD(cteList);
 	READ_NODE_FIELD(rtable);
 	READ_NODE_FIELD(jointree);
@@ -320,7 +321,7 @@ _readRowMarkClause(void)
 
 	READ_UINT_FIELD(rti);
 	READ_ENUM_FIELD(strength, LockClauseStrength);
-	READ_BOOL_FIELD(noWait);
+	READ_ENUM_FIELD(waitPolicy, LockWaitPolicy);
 	READ_BOOL_FIELD(pushedDown);
 
 	READ_DONE();
@@ -601,7 +602,7 @@ _readOpExpr(void)
 	/*
 	 * The opfuncid is stored in the textual format primarily for debugging
 	 * and documentation reasons.  We want to always read it as zero to force
-	 * it to be re-looked-up in the pg_operator entry.	This ensures that
+	 * it to be re-looked-up in the pg_operator entry.  This ensures that
 	 * stored rules don't have hidden dependencies on operators' functions.
 	 * (We don't currently support an ALTER OPERATOR command, but might
 	 * someday.)
@@ -632,7 +633,7 @@ _readDistinctExpr(void)
 	/*
 	 * The opfuncid is stored in the textual format primarily for debugging
 	 * and documentation reasons.  We want to always read it as zero to force
-	 * it to be re-looked-up in the pg_operator entry.	This ensures that
+	 * it to be re-looked-up in the pg_operator entry.  This ensures that
 	 * stored rules don't have hidden dependencies on operators' functions.
 	 * (We don't currently support an ALTER OPERATOR command, but might
 	 * someday.)
@@ -663,7 +664,7 @@ _readNullIfExpr(void)
 	/*
 	 * The opfuncid is stored in the textual format primarily for debugging
 	 * and documentation reasons.  We want to always read it as zero to force
-	 * it to be re-looked-up in the pg_operator entry.	This ensures that
+	 * it to be re-looked-up in the pg_operator entry.  This ensures that
 	 * stored rules don't have hidden dependencies on operators' functions.
 	 * (We don't currently support an ALTER OPERATOR command, but might
 	 * someday.)
@@ -694,7 +695,7 @@ _readScalarArrayOpExpr(void)
 	/*
 	 * The opfuncid is stored in the textual format primarily for debugging
 	 * and documentation reasons.  We want to always read it as zero to force
-	 * it to be re-looked-up in the pg_operator entry.	This ensures that
+	 * it to be re-looked-up in the pg_operator entry.  This ensures that
 	 * stored rules don't have hidden dependencies on operators' functions.
 	 * (We don't currently support an ALTER OPERATOR command, but might
 	 * someday.)
@@ -744,6 +745,7 @@ _readSubLink(void)
 	READ_LOCALS(SubLink);
 
 	READ_ENUM_FIELD(subLinkType, SubLinkType);
+	READ_INT_FIELD(subLinkId);
 	READ_NODE_FIELD(testexpr);
 	READ_NODE_FIELD(operName);
 	READ_NODE_FIELD(subselect);
@@ -1252,6 +1254,7 @@ _readRangeTblEntry(void)
 	READ_OID_FIELD(checkAsUser);
 	READ_BITMAPSET_FIELD(selectedCols);
 	READ_BITMAPSET_FIELD(modifiedCols);
+	READ_NODE_FIELD(securityQuals);
 
 	READ_DONE();
 }

@@ -51,7 +51,7 @@ typedef struct EventTriggerQueryState
 	struct EventTriggerQueryState *previous;
 } EventTriggerQueryState;
 
-EventTriggerQueryState *currentEventTriggerState = NULL;
+static EventTriggerQueryState *currentEventTriggerState = NULL;
 
 typedef struct
 {
@@ -85,6 +85,7 @@ static event_trigger_support_data event_trigger_support[] = {
 	{"OPERATOR", true},
 	{"OPERATOR CLASS", true},
 	{"OPERATOR FAMILY", true},
+	{"POLICY", true},
 	{"ROLE", false},
 	{"RULE", true},
 	{"SCHEMA", true},
@@ -250,7 +251,8 @@ check_ddl_tag(const char *tag)
 		pg_strcasecmp(tag, "REFRESH MATERIALIZED VIEW") == 0 ||
 		pg_strcasecmp(tag, "ALTER DEFAULT PRIVILEGES") == 0 ||
 		pg_strcasecmp(tag, "ALTER LARGE OBJECT") == 0 ||
-		pg_strcasecmp(tag, "DROP OWNED") == 0)
+		pg_strcasecmp(tag, "DROP OWNED") == 0 ||
+		pg_strcasecmp(tag, "IMPORT FOREIGN SCHEMA") == 0)
 		return EVENT_TRIGGER_COMMAND_TAG_OK;
 
 	/*
@@ -491,7 +493,7 @@ AlterEventTriggerOwner(const char *name, Oid newOwnerId)
 }
 
 /*
- * Change extension owner, by OID
+ * Change event trigger owner, by OID
  */
 void
 AlterEventTriggerOwner_oid(Oid trigOid, Oid newOwnerId)
@@ -606,7 +608,7 @@ filter_event_trigger(const char **tag, EventTriggerCacheItem *item)
 }
 
 /*
- * Setup for running triggers for the given event.	Return value is an OID list
+ * Setup for running triggers for the given event.  Return value is an OID list
  * of functions to run; if there are any, trigdata is filled with an
  * appropriate EventTriggerData for them to receive.
  */
@@ -625,7 +627,7 @@ EventTriggerCommonSetup(Node *parsetree,
 	 * invoked to match up exactly with the list that CREATE EVENT TRIGGER
 	 * accepts.  This debugging cross-check will throw an error if this
 	 * function is invoked for a command tag that CREATE EVENT TRIGGER won't
-	 * accept.	(Unfortunately, there doesn't seem to be any simple, automated
+	 * accept.  (Unfortunately, there doesn't seem to be any simple, automated
 	 * way to verify that CREATE EVENT TRIGGER doesn't accept extra stuff that
 	 * never reaches this control point.)
 	 *
@@ -635,7 +637,6 @@ EventTriggerCommonSetup(Node *parsetree,
 	 * relevant command tag.
 	 */
 #ifdef USE_ASSERT_CHECKING
-	if (assert_enabled)
 	{
 		const char *dbgtag;
 
@@ -655,7 +656,7 @@ EventTriggerCommonSetup(Node *parsetree,
 
 	/*
 	 * Filter list of event triggers by command tag, and copy them into our
-	 * memory context.	Once we start running the command trigers, or indeed
+	 * memory context.  Once we start running the command trigers, or indeed
 	 * once we do anything at all that touches the catalogs, an invalidation
 	 * might leave cachelist pointing at garbage, so we must do this before we
 	 * can do much else.
@@ -783,7 +784,7 @@ EventTriggerSQLDrop(Node *parsetree)
 		return;
 
 	/*
-	 * Use current state to determine whether this event fires at all.	If
+	 * Use current state to determine whether this event fires at all.  If
 	 * there are no triggers for the sql_drop event, then we don't have
 	 * anything to do here.  Note that dropped object collection is disabled
 	 * if this is the case, so even if we were to try to run, the list would
@@ -798,7 +799,7 @@ EventTriggerSQLDrop(Node *parsetree)
 									  &trigdata);
 
 	/*
-	 * Nothing to do if run list is empty.	Note this shouldn't happen,
+	 * Nothing to do if run list is empty.  Note this shouldn't happen,
 	 * because if there are no sql_drop events, then objects-to-drop wouldn't
 	 * have been collected in the first place and we would have quitted above.
 	 */
@@ -813,7 +814,7 @@ EventTriggerSQLDrop(Node *parsetree)
 
 	/*
 	 * Make sure pg_event_trigger_dropped_objects only works when running
-	 * these triggers.	Use PG_TRY to ensure in_sql_drop is reset even when
+	 * these triggers.  Use PG_TRY to ensure in_sql_drop is reset even when
 	 * one trigger fails.  (This is perhaps not necessary, as the currentState
 	 * variable will be removed shortly by our caller, but it seems better to
 	 * play safe.)
@@ -936,6 +937,7 @@ EventTriggerSupportsObjectType(ObjectType obtype)
 		case OBJECT_OPCLASS:
 		case OBJECT_OPERATOR:
 		case OBJECT_OPFAMILY:
+		case OBJECT_POLICY:
 		case OBJECT_RULE:
 		case OBJECT_SCHEMA:
 		case OBJECT_SEQUENCE:
@@ -995,6 +997,7 @@ EventTriggerSupportsObjectClass(ObjectClass objclass)
 		case OCLASS_USER_MAPPING:
 		case OCLASS_DEFACL:
 		case OCLASS_EXTENSION:
+		case OCLASS_ROWSECURITY:
 			return true;
 
 		case MAX_OCLASS:
@@ -1053,7 +1056,7 @@ EventTriggerBeginCompleteQuery(void)
  * returned false previously.
  *
  * Note: this might be called in the PG_CATCH block of a failing transaction,
- * so be wary of running anything unnecessary.	(In particular, it's probably
+ * so be wary of running anything unnecessary.  (In particular, it's probably
  * unwise to try to allocate memory.)
  */
 void

@@ -20,7 +20,7 @@
 
 /*
  *	This structure holds a list of possible functions or operators
- *	found by namespace lookup.	Each function/operator is identified
+ *	found by namespace lookup.  Each function/operator is identified
  *	by OID and by argument types; the list must be pruned by type
  *	resolution rules that are embodied in the parser, not here.
  *	See FuncnameGetCandidates's comments for more info.
@@ -76,7 +76,8 @@ extern FuncCandidateList FuncnameGetCandidates(List *names,
 extern bool FunctionIsVisible(Oid funcid);
 
 extern Oid	OpernameGetOprid(List *names, Oid oprleft, Oid oprright);
-extern FuncCandidateList OpernameGetCandidates(List *names, char oprkind);
+extern FuncCandidateList OpernameGetCandidates(List *names, char oprkind,
+					  bool missing_schema_ok);
 extern bool OperatorIsVisible(Oid oprid);
 
 extern Oid	OpclassnameGetOpcid(Oid amid, const char *opcname);
@@ -120,7 +121,7 @@ extern char *NameListToQuotedString(List *names);
 
 extern bool isTempNamespace(Oid namespaceId);
 extern bool isTempToastNamespace(Oid namespaceId);
-extern bool isTempOrToastNamespace(Oid namespaceId);
+extern bool isTempOrTempToastNamespace(Oid namespaceId);
 extern bool isAnyTempNamespace(Oid namespaceId);
 extern bool isOtherTempNamespace(Oid namespaceId);
 extern int	GetTempNamespaceBackendId(Oid namespaceId);

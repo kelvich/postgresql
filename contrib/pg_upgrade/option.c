@@ -10,13 +10,12 @@
 #include "postgres_fe.h"
 
 #include "miscadmin.h"
+#include "getopt_long.h"
 
 #include "pg_upgrade.h"
 
-#include <getopt_long.h>
 #include <time.h>
 #include <sys/types.h>
-#include <sys/stat.h>
 #ifdef WIN32
 #include <io.h>
 #endif
@@ -138,17 +137,35 @@ parseCommandLine(int argc, char *argv[])
 				break;
 
 			case 'o':
-				old_cluster.pgopts = pg_strdup(optarg);
+				/* append option? */
+				if (!old_cluster.pgopts)
+					old_cluster.pgopts = pg_strdup(optarg);
+				else
+				{
+					char *old_pgopts = old_cluster.pgopts;
+
+					old_cluster.pgopts = psprintf("%s %s", old_pgopts, optarg);
+					free(old_pgopts);
+				}
 				break;
 
 			case 'O':
-				new_cluster.pgopts = pg_strdup(optarg);
+				/* append option? */
+				if (!new_cluster.pgopts)
+					new_cluster.pgopts = pg_strdup(optarg);
+				else
+				{
+					char *new_pgopts = new_cluster.pgopts;
+
+					new_cluster.pgopts = psprintf("%s %s", new_pgopts, optarg);
+					free(new_pgopts);
+				}
 				break;
 
 				/*
 				 * Someday, the port number option could be removed and passed
 				 * using -o/-O, but that requires postmaster -C to be
-				 * supported on all old/new versions.
+				 * supported on all old/new versions (added in PG 9.2).
 				 */
 			case 'p':
 				if ((old_cluster.port = atoi(optarg)) <= 0)
@@ -189,7 +206,7 @@ parseCommandLine(int argc, char *argv[])
 
 			default:
 				pg_fatal("Try \"%s --help\" for more information.\n",
-					   os_info.progname);
+						 os_info.progname);
 				break;
 		}
 	}
@@ -212,8 +229,9 @@ parseCommandLine(int argc, char *argv[])
 	/* Turn off read-only mode;  add prefix to PGOPTIONS? */
 	if (getenv("PGOPTIONS"))
 	{
-		char *pgoptions = psprintf("%s %s", FIX_DEFAULT_READ_ONLY,
-									getenv("PGOPTIONS"));
+		char	   *pgoptions = psprintf("%s %s", FIX_DEFAULT_READ_ONLY,
+										 getenv("PGOPTIONS"));
+
 		pg_putenv("PGOPTIONS", pgoptions);
 		pfree(pgoptions);
 	}
@@ -229,6 +247,26 @@ parseCommandLine(int argc, char *argv[])
 							 "PGDATAOLD", "-d", "old cluster data resides");
 	check_required_directory(&new_cluster.pgdata, &new_cluster.pgconfig,
 							 "PGDATANEW", "-D", "new cluster data resides");
+
+#ifdef WIN32
+	/*
+	 * On Windows, initdb --sync-only will fail with a "Permission denied"
+	 * error on file pg_upgrade_utility.log if pg_upgrade is run inside
+	 * the new cluster directory, so we do a check here.
+	 */
+	{
+		char	cwd[MAXPGPATH], new_cluster_pgdata[MAXPGPATH];
+
+		strlcpy(new_cluster_pgdata, new_cluster.pgdata, MAXPGPATH);
+		canonicalize_path(new_cluster_pgdata);
+
+		if (!getcwd(cwd, MAXPGPATH))
+			pg_fatal("cannot find current directory\n");
+		canonicalize_path(cwd);
+		if (path_is_prefix_of_path(new_cluster_pgdata, cwd))
+			pg_fatal("cannot run pg_upgrade from inside the new cluster data directory on Windows\n");
+	}
+#endif
 }
 
 
@@ -240,7 +278,7 @@ usage(void)
   pg_upgrade [OPTION]...\n\
 \n\
 Options:\n\
-  -b, --old-bindir=BINDIR      old cluster executable directory\n\
+  -b, --old-bindir=BINDIR       old cluster executable directory\n\
   -B, --new-bindir=BINDIR       new cluster executable directory\n\
   -c, --check                   check clusters only, don't change any data\n\
   -d, --old-datadir=DATADIR     old cluster data directory\n\
@@ -320,8 +358,8 @@ check_required_directory(char **dirpath, char **configpath,
 		}
 		else
 			pg_fatal("You must identify the directory where the %s.\n"
-				   "Please use the %s command-line option or the %s environment variable.\n",
-				   description, cmdLineOption, envVarName);
+					 "Please use the %s command-line option or the %s environment variable.\n",
+					 description, cmdLineOption, envVarName);
 	}
 
 	/*
@@ -374,7 +412,7 @@ adjust_data_dir(ClusterInfo *cluster)
 
 	/*
 	 * We don't have a data directory yet, so we can't check the PG version,
-	 * so this might fail --- only works for PG 9.2+.	If this fails,
+	 * so this might fail --- only works for PG 9.2+.   If this fails,
 	 * pg_upgrade will fail anyway because the data files will not be found.
 	 */
 	snprintf(cmd, sizeof(cmd), "\"%s/postmaster\" -D \"%s\" -C data_directory",
@@ -383,7 +421,7 @@ adjust_data_dir(ClusterInfo *cluster)
 	if ((output = popen(cmd, "r")) == NULL ||
 		fgets(cmd_output, sizeof(cmd_output), output) == NULL)
 		pg_fatal("Could not get data directory using %s: %s\n",
-			   cmd, getErrorText(errno));
+				 cmd, getErrorText(errno));
 
 	pclose(output);
 
@@ -453,9 +491,10 @@ get_sock_dir(ClusterInfo *cluster, bool live_check)
 					sscanf(line, "%hu", &old_cluster.port);
 				if (lineno == LOCK_FILE_LINE_SOCKET_DIR)
 				{
-					cluster->sockdir = pg_malloc(MAXPGPATH);
+					cluster->sockdir = pg_strdup(line);
 					/* strip off newline */
-					sscanf(line, "%s\n", cluster->sockdir);
+					if (strchr(cluster->sockdir, '\n') != NULL)
+						*strchr(cluster->sockdir, '\n') = '\0';
 				}
 			}
 			fclose(fp);

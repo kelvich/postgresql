@@ -58,7 +58,7 @@
  * DEPENDENCY_PIN ('p'): there is no dependent object; this type of entry
  * is a signal that the system itself depends on the referenced object,
  * and so that object must never be deleted.  Entries of this type are
- * created only during initdb.	The fields for the dependent object
+ * created only during initdb.  The fields for the dependent object
  * contain zeroes.
  *
  * Other dependency flavors may be needed in future.
@@ -147,6 +147,7 @@ typedef enum ObjectClass
 	OCLASS_DEFACL,				/* pg_default_acl */
 	OCLASS_EXTENSION,			/* pg_extension */
 	OCLASS_EVENT_TRIGGER,		/* pg_event_trigger */
+	OCLASS_ROWSECURITY,			/* pg_rowsecurity */
 	MAX_OCLASS					/* MUST BE LAST */
 } ObjectClass;
 

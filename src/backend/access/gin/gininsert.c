@@ -15,7 +15,6 @@
 #include "postgres.h"
 
 #include "access/gin_private.h"
-#include "access/heapam_xlog.h"
 #include "catalog/index.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
@@ -40,7 +39,7 @@ typedef struct
  * Adds array of item pointers to tuple's posting list, or
  * creates posting tree and tuple pointing to tree in case
  * of not enough space.  Max size of tuple is defined in
- * GinFormTuple().	Returns a new, modified index tuple.
+ * GinFormTuple().  Returns a new, modified index tuple.
  * items[] must be in sorted order with no duplicates.
  */
 static IndexTuple
@@ -67,12 +66,9 @@ addItemPointersToLeafTuple(GinState *ginstate,
 	/* merge the old and new posting lists */
 	oldItems = ginReadTuple(ginstate, attnum, old, &oldNPosting);
 
-	newNPosting = oldNPosting + nitem;
-	newItems = (ItemPointerData *) palloc(sizeof(ItemPointerData) * newNPosting);
-
-	newNPosting = ginMergeItemPointers(newItems,
-									   items, nitem,
-									   oldItems, oldNPosting);
+	newItems = ginMergeItemPointers(items, nitem,
+									oldItems, oldNPosting,
+									&newNPosting);
 
 	/* Compress the posting list, and try to a build tuple with room for it */
 	res = NULL;

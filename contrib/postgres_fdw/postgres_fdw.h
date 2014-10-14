@@ -41,6 +41,7 @@ extern int ExtractConnectionOptions(List *defelems,
 /* in deparse.c */
 extern void classifyConditions(PlannerInfo *root,
 				   RelOptInfo *baserel,
+				   List *input_conds,
 				   List **remote_conds,
 				   List **local_conds);
 extern bool is_foreign_expr(PlannerInfo *root,
@@ -72,5 +73,6 @@ extern void deparseDeleteSql(StringInfo buf, PlannerInfo *root,
 extern void deparseAnalyzeSizeSql(StringInfo buf, Relation rel);
 extern void deparseAnalyzeSql(StringInfo buf, Relation rel,
 				  List **retrieved_attrs);
+extern void deparseStringLiteral(StringInfo buf, const char *val);
 
 #endif   /* POSTGRES_FDW_H */

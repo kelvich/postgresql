@@ -698,7 +698,7 @@ ri_restrict_del(TriggerData *trigdata, bool is_no_action)
 
 			/*
 			 * If another PK row now exists providing the old key values, we
-			 * should not do anything.	However, this check should only be
+			 * should not do anything.  However, this check should only be
 			 * made in the NO ACTION case; in RESTRICT cases we don't wish to
 			 * allow another row to be substituted.
 			 */
@@ -922,7 +922,7 @@ ri_restrict_upd(TriggerData *trigdata, bool is_no_action)
 
 			/*
 			 * If another PK row now exists providing the old key values, we
-			 * should not do anything.	However, this check should only be
+			 * should not do anything.  However, this check should only be
 			 * made in the NO ACTION case; in RESTRICT cases we don't wish to
 			 * allow another row to be substituted.
 			 */
@@ -1850,7 +1850,7 @@ RI_FKey_setdefault_del(PG_FUNCTION_ARGS)
 			 * believe no check is necessary.  So we need to do another lookup
 			 * now and in case a reference still exists, abort the operation.
 			 * That is already implemented in the NO ACTION trigger, so just
-			 * run it.	(This recheck is only needed in the SET DEFAULT case,
+			 * run it.  (This recheck is only needed in the SET DEFAULT case,
 			 * since CASCADE would remove such rows, while SET NULL is certain
 			 * to result in rows that satisfy the FK constraint.)
 			 */
@@ -2041,7 +2041,7 @@ RI_FKey_setdefault_upd(PG_FUNCTION_ARGS)
 			 * believe no check is necessary.  So we need to do another lookup
 			 * now and in case a reference still exists, abort the operation.
 			 * That is already implemented in the NO ACTION trigger, so just
-			 * run it.	(This recheck is only needed in the SET DEFAULT case,
+			 * run it.  (This recheck is only needed in the SET DEFAULT case,
 			 * since CASCADE must change the FK key values, while SET NULL is
 			 * certain to result in rows that satisfy the FK constraint.)
 			 */
@@ -2303,6 +2303,18 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	if (!ExecCheckRTPerms(list_make2(fkrte, pkrte), false))
 		return false;
 
+	/*
+	 * Also punt if RLS is enabled on either table unless this role has the
+	 * bypassrls right or is the table owner of the table(s) involved which
+	 * have RLS enabled.
+	 */
+	if (!has_bypassrls_privilege(GetUserId()) &&
+		((pk_rel->rd_rel->relrowsecurity &&
+		  !pg_class_ownercheck(pkrte->relid, GetUserId())) ||
+		 (fk_rel->rd_rel->relrowsecurity &&
+		  !pg_class_ownercheck(fkrte->relid, GetUserId()))))
+		return false;
+
 	/*----------
 	 * The query string built is:
 	 *	SELECT fk.keycols FROM ONLY relname fk
@@ -2397,7 +2409,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 	 * Temporarily increase work_mem so that the check query can be executed
 	 * more efficiently.  It seems okay to do this because the query is simple
 	 * enough to not use a multiple of work_mem, and one typically would not
-	 * have many large foreign-key validations happening concurrently.	So
+	 * have many large foreign-key validations happening concurrently.  So
 	 * this seems to meet the criteria for being considered a "maintenance"
 	 * operation, and accordingly we use maintenance_work_mem.
 	 *
@@ -2451,7 +2463,7 @@ RI_Initial_Check(Trigger *trigger, Relation fk_rel, Relation pk_rel)
 
 		/*
 		 * The columns to look at in the result tuple are 1..N, not whatever
-		 * they are in the fk_rel.	Hack up riinfo so that the subroutines
+		 * they are in the fk_rel.  Hack up riinfo so that the subroutines
 		 * called here will behave properly.
 		 *
 		 * In addition to this, we have to pass the correct tupdesc to
@@ -2934,7 +2946,8 @@ InvalidateConstraintCacheCallBack(Datum arg, int cacheid, uint32 hashvalue)
 	hash_seq_init(&status, ri_constraint_cache);
 	while ((hentry = (RI_ConstraintInfo *) hash_seq_search(&status)) != NULL)
 	{
-		if (hashvalue == 0 || hentry->oidHashValue == hashvalue)
+		if (hentry->valid &&
+			(hashvalue == 0 || hentry->oidHashValue == hashvalue))
 			hentry->valid = false;
 	}
 }
@@ -2955,6 +2968,7 @@ ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
 	Relation	query_rel;
 	Oid			save_userid;
 	int			save_sec_context;
+	int			temp_sec_context;
 
 	/*
 	 * Use the query type code to determine whether the query is run against
@@ -2967,8 +2981,22 @@ ri_PlanCheck(const char *querystr, int nargs, Oid *argtypes,
 
 	/* Switch to proper UID to perform check as */
 	GetUserIdAndSecContext(&save_userid, &save_sec_context);
+
+	/*
+	 * Row-level security should be disabled in the case where a foreign-key
+	 * relation is queried to check existence of tuples that references the
+	 * primary-key being modified.
+	 */
+	temp_sec_context = save_sec_context | SECURITY_LOCAL_USERID_CHANGE;
+	if (qkey->constr_queryno == RI_PLAN_CHECK_LOOKUPPK
+		|| qkey->constr_queryno == RI_PLAN_CHECK_LOOKUPPK_FROM_PK
+		|| qkey->constr_queryno == RI_PLAN_RESTRICT_DEL_CHECKREF
+		|| qkey->constr_queryno == RI_PLAN_RESTRICT_UPD_CHECKREF)
+		temp_sec_context |= SECURITY_ROW_LEVEL_DISABLED;
+
+
 	SetUserIdAndSecContext(RelationGetForm(query_rel)->relowner,
-						   save_sec_context | SECURITY_LOCAL_USERID_CHANGE);
+						   temp_sec_context);
 
 	/* Create the plan */
 	qplan = SPI_prepare(querystr, nargs, argtypes);
@@ -3180,7 +3208,7 @@ ri_ReportViolation(const RI_ConstraintInfo *riinfo,
 				 errhint("This is most likely due to a rule having rewritten the query.")));
 
 	/*
-	 * Determine which relation to complain about.	If tupdesc wasn't passed
+	 * Determine which relation to complain about.  If tupdesc wasn't passed
 	 * by caller, assume the violator tuple came from there.
 	 */
 	onfk = (queryno == RI_PLAN_CHECK_LOOKUPPK);

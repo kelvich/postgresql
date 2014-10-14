@@ -470,6 +470,57 @@ CREATE USER MAPPING FOR current_user SERVER s9;
 DROP SERVER s9 CASCADE;                                         -- ERROR
 RESET ROLE;
 
+-- Triggers
+CREATE FUNCTION dummy_trigger() RETURNS TRIGGER AS $$
+  BEGIN
+    RETURN NULL;
+  END
+$$ language plpgsql;
+
+CREATE TRIGGER trigtest_before_stmt BEFORE INSERT OR UPDATE OR DELETE
+ON foreign_schema.foreign_table_1
+FOR EACH STATEMENT
+EXECUTE PROCEDURE dummy_trigger();
+
+CREATE TRIGGER trigtest_after_stmt AFTER INSERT OR UPDATE OR DELETE
+ON foreign_schema.foreign_table_1
+FOR EACH STATEMENT
+EXECUTE PROCEDURE dummy_trigger();
+
+CREATE TRIGGER trigtest_before_row BEFORE INSERT OR UPDATE OR DELETE
+ON foreign_schema.foreign_table_1
+FOR EACH ROW
+EXECUTE PROCEDURE dummy_trigger();
+
+CREATE TRIGGER trigtest_after_row AFTER INSERT OR UPDATE OR DELETE
+ON foreign_schema.foreign_table_1
+FOR EACH ROW
+EXECUTE PROCEDURE dummy_trigger();
+
+CREATE CONSTRAINT TRIGGER trigtest_constraint AFTER INSERT OR UPDATE OR DELETE
+ON foreign_schema.foreign_table_1
+FOR EACH ROW
+EXECUTE PROCEDURE dummy_trigger();
+
+ALTER FOREIGN TABLE foreign_schema.foreign_table_1
+	DISABLE TRIGGER trigtest_before_stmt;
+ALTER FOREIGN TABLE foreign_schema.foreign_table_1
+	ENABLE TRIGGER trigtest_before_stmt;
+
+DROP TRIGGER trigtest_before_stmt ON foreign_schema.foreign_table_1;
+DROP TRIGGER trigtest_before_row ON foreign_schema.foreign_table_1;
+DROP TRIGGER trigtest_after_stmt ON foreign_schema.foreign_table_1;
+DROP TRIGGER trigtest_after_row ON foreign_schema.foreign_table_1;
+
+DROP FUNCTION dummy_trigger();
+
+-- IMPORT FOREIGN SCHEMA
+IMPORT FOREIGN SCHEMA s1 FROM SERVER s9 INTO public; -- ERROR
+IMPORT FOREIGN SCHEMA s1 LIMIT TO (t1) FROM SERVER s9 INTO public; --ERROR
+IMPORT FOREIGN SCHEMA s1 EXCEPT (t1) FROM SERVER s9 INTO public; -- ERROR
+IMPORT FOREIGN SCHEMA s1 EXCEPT (t1, t2) FROM SERVER s9 INTO public
+OPTIONS (option1 'value1', option2 'value2'); -- ERROR
+
 -- DROP FOREIGN TABLE
 DROP FOREIGN TABLE no_table;                                    -- ERROR
 DROP FOREIGN TABLE IF EXISTS no_table;

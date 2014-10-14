@@ -19,6 +19,7 @@
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
 #include "storage/lock.h"
+#include "utils/lockwaitpolicy.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
@@ -59,7 +60,7 @@ typedef enum LockTupleMode
  * replacement is really a match.
  * cmax is the outdating command's CID, but only when the failure code is
  * HeapTupleSelfUpdated (i.e., something in the current transaction outdated
- * the tuple); otherwise cmax is zero.	(We make this restriction because
+ * the tuple); otherwise cmax is zero.  (We make this restriction because
  * HeapTupleHeaderGetCmax doesn't work for tuples outdated in other
  * transactions.)
  */
@@ -106,7 +107,7 @@ typedef struct HeapScanDescData *HeapScanDesc;
 extern HeapScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 			   int nkeys, ScanKey key);
 extern HeapScanDesc heap_beginscan_catalog(Relation relation, int nkeys,
-			   ScanKey key);
+					   ScanKey key);
 extern HeapScanDesc heap_beginscan_strat(Relation relation, Snapshot snapshot,
 					 int nkeys, ScanKey key,
 					 bool allow_strat, bool allow_sync);
@@ -144,7 +145,7 @@ extern HTSU_Result heap_update(Relation relation, ItemPointer otid,
 			CommandId cid, Snapshot crosscheck, bool wait,
 			HeapUpdateFailureData *hufd, LockTupleMode *lockmode);
 extern HTSU_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
-				CommandId cid, LockTupleMode mode, bool nowait,
+				CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 				bool follow_update,
 				Buffer *buffer, HeapUpdateFailureData *hufd);
 extern void heap_inplace_update(Relation relation, HeapTuple tuple);
@@ -164,8 +165,7 @@ extern void heap_restrpos(HeapScanDesc scan);
 extern void heap_sync(Relation relation);
 
 /* in heap/pruneheap.c */
-extern void heap_page_prune_opt(Relation relation, Buffer buffer,
-					TransactionId OldestXmin);
+extern void heap_page_prune_opt(Relation relation, Buffer buffer);
 extern int heap_page_prune(Relation relation, Buffer buffer,
 				TransactionId OldestXmin,
 				bool report_stats, TransactionId *latestRemovedXid);

@@ -31,6 +31,7 @@ typedef enum
 {
 	PSQL_ECHO_NONE,
 	PSQL_ECHO_QUERIES,
+	PSQL_ECHO_ERRORS,
 	PSQL_ECHO_ALL
 } PSQL_ECHO;
 
@@ -70,6 +71,8 @@ typedef struct _psqlSettings
 	FILE	   *queryFout;		/* where to send the query results */
 	bool		queryFoutPipe;	/* queryFout is from a popen() */
 
+	FILE	   *copyStream;		/* Stream to read/write for \copy command */
+
 	printQueryOpt popt;
 
 	char	   *gfname;			/* one-shot file output argument for \g */
@@ -85,6 +88,7 @@ typedef struct _psqlSettings
 	const char *progname;		/* in case you renamed psql */
 	char	   *inputfile;		/* file being currently processed, if any */
 	uint64		lineno;			/* also for error reporting */
+	uint64		stmt_lineno;	/* line number inside the current statement */
 
 	bool		timing;			/* enable timing of all queries */
 
@@ -94,7 +98,7 @@ typedef struct _psqlSettings
 
 	/*
 	 * The remaining fields are set by assign hooks associated with entries in
-	 * "vars".	They should not be set directly except by those hook
+	 * "vars".  They should not be set directly except by those hook
 	 * functions.
 	 */
 	bool		autocommit;

@@ -12,8 +12,8 @@
 
 /*
  * Object access hooks are intended to be called just before or just after
- * performing certain actions on a SQL object.	This is intended as
- * infrastructure for security or logging pluggins.
+ * performing certain actions on a SQL object.  This is intended as
+ * infrastructure for security or logging plugins.
  *
  * OAT_POST_CREATE should be invoked just after the object is created.
  * Typically, this is done after inserting the primary catalog records and
@@ -45,7 +45,7 @@ typedef enum ObjectAccessType
 	OAT_DROP,
 	OAT_POST_ALTER,
 	OAT_NAMESPACE_SEARCH,
-	OAT_FUNCTION_EXECUTE,
+	OAT_FUNCTION_EXECUTE
 } ObjectAccessType;
 
 /*

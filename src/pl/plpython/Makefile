@@ -9,14 +9,17 @@ include $(top_builddir)/src/Makefile.global
 # asks Python directly.  But because this has been broken in Debian
 # for a long time (http://bugs.debian.org/695979), and to support
 # older Python versions, we see if there is a file that is named like
-# a shared library as a fallback.  (Note that this is wrong on OS X,
-# where DLSUFFIX is .so, but libpython is a .dylib.  Python <2.5 is
-# therefore not supported on OS X.)
+# a shared library as a fallback.
 ifeq (1,$(python_enable_shared))
+shared_libpython = yes
+else
+ifeq ($(PORTNAME), darwin)
+# OS X does supply a .dylib even though Py_ENABLE_SHARED does not get set
 shared_libpython = yes
 else
 ifneq (,$(wildcard $(python_libdir)/libpython*$(DLSUFFIX)*))
 shared_libpython = yes
+endif
 endif
 endif
 
@@ -35,6 +38,8 @@ override CPPFLAGS := -I. -I$(srcdir) $(python_includespec) $(CPPFLAGS)
 
 rpathdir = $(python_libdir)
 
+PGFILEDESC = "PL/Python - procedural language"
+
 NAME = plpython$(python_majorversion)
 
 OBJS = \
@@ -49,7 +54,8 @@ OBJS = \
 	plpy_spi.o \
 	plpy_subxactobject.o \
 	plpy_typeio.o \
-	plpy_util.o
+	plpy_util.o \
+	$(WIN32RES)
 
 DATA = $(NAME)u.control $(NAME)u--1.0.sql $(NAME)u--unpackaged--1.0.sql
 ifeq ($(python_majorversion),2)
@@ -61,14 +67,19 @@ endif
 # which are not compatible with mingw gcc. Therefore we need to build a
 # new import library to link with.
 ifeq ($(PORTNAME), win32)
+
 pytverstr=$(subst .,,${python_version})
+PYTHONDLL=$(subst \,/,$(WINDIR))/system32/python${pytverstr}.dll
+
 OBJS += libpython${pytverstr}.a
+
 libpython${pytverstr}.a: python${pytverstr}.def
-	dlltool --dllname python${pytverstr}.dll --def python${pytverstr}.def --output-lib  libpython${pytverstr}.a
-WD=$(subst \,/,$(WINDIR))
-python${pytverstr}.def:
-	pexports $(WD)/system32/python${pytverstr}.dll > python${pytverstr}.def
-endif
+	dlltool --dllname python${pytverstr}.dll --def python${pytverstr}.def --output-lib libpython${pytverstr}.a
+
+python${pytverstr}.def: $(PYTHONDLL)
+	pexports $^ > $@
+
+endif # win32
 
 
 SHLIB_LINK = $(python_libspec) $(python_additional_libs) $(filter -lintl,$(LIBS))

@@ -186,3 +186,24 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY mv_v;
 SELECT * FROM v;
 SELECT * FROM mv_v;
 DROP TABLE v CASCADE;
+
+-- make sure that matview rows can be referenced as source rows (bug #9398)
+CREATE TABLE v AS SELECT generate_series(1,10) AS a;
+CREATE MATERIALIZED VIEW mv_v AS SELECT a FROM v WHERE a <= 5;
+DELETE FROM v WHERE EXISTS ( SELECT * FROM mv_v WHERE mv_v.a = v.a );
+SELECT * FROM v;
+SELECT * FROM mv_v;
+DROP TABLE v CASCADE;
+
+-- make sure running as superuser works when MV owned by another role (bug #11208)
+CREATE ROLE user_dw;
+SET ROLE user_dw;
+CREATE TABLE foo_data AS SELECT i, md5(random()::text)
+  FROM generate_series(1, 10) i;
+CREATE MATERIALIZED VIEW mv_foo AS SELECT * FROM foo_data;
+CREATE UNIQUE INDEX ON mv_foo (i);
+RESET ROLE;
+REFRESH MATERIALIZED VIEW mv_foo;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_foo;
+DROP OWNED BY user_dw CASCADE;
+DROP ROLE user_dw;

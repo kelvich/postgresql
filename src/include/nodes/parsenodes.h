@@ -23,6 +23,7 @@
 #include "nodes/bitmapset.h"
 #include "nodes/primnodes.h"
 #include "nodes/value.h"
+#include "utils/lockwaitpolicy.h"
 
 /* Possible sources of a Query */
 typedef enum QuerySource
@@ -120,6 +121,7 @@ typedef struct Query
 	bool		hasRecursive;	/* WITH RECURSIVE was specified */
 	bool		hasModifyingCTE;	/* has INSERT/UPDATE/DELETE in WITH */
 	bool		hasForUpdate;	/* FOR [KEY] UPDATE/SHARE was specified */
+	bool		hasRowSecurity;	/* Row-security policy is applied */
 
 	List	   *cteList;		/* WITH list (of CommonTableExpr's) */
 
@@ -128,7 +130,7 @@ typedef struct Query
 
 	List	   *targetList;		/* target list (of TargetEntry) */
 
-	List	   *withCheckOptions; /* a list of WithCheckOption's */
+	List	   *withCheckOptions;		/* a list of WithCheckOption's */
 
 	List	   *returningList;	/* return-values list (of TargetEntry) */
 
@@ -159,7 +161,7 @@ typedef struct Query
  *	Supporting data structures for Parse Trees
  *
  *	Most of these node types appear in raw parsetrees output by the grammar,
- *	and get transformed to something else by the analyzer.	A few of them
+ *	and get transformed to something else by the analyzer.  A few of them
  *	are used as-is in transformed querytrees.
  ****************************************************************************/
 
@@ -173,7 +175,7 @@ typedef struct Query
  * be prespecified in typemod, otherwise typemod is unused.
  *
  * If pct_type is TRUE, then names is actually a field name and we look up
- * the type of that field.	Otherwise (the normal case), names is a type
+ * the type of that field.  Otherwise (the normal case), names is a type
  * name possibly qualified with schema and database name.
  */
 typedef struct TypeName
@@ -192,7 +194,7 @@ typedef struct TypeName
 /*
  * ColumnRef - specifies a reference to a column, or possibly a whole tuple
  *
- * The "fields" list must be nonempty.	It can contain string Value nodes
+ * The "fields" list must be nonempty.  It can contain string Value nodes
  * (representing names) and A_Star nodes (representing occurrence of a '*').
  * Currently, A_Star must appear only as the last list element --- the grammar
  * is responsible for enforcing this!
@@ -225,9 +227,6 @@ typedef struct ParamRef
 typedef enum A_Expr_Kind
 {
 	AEXPR_OP,					/* normal operator */
-	AEXPR_AND,					/* booleans - name field is unused */
-	AEXPR_OR,
-	AEXPR_NOT,
 	AEXPR_OP_ANY,				/* scalar op ANY (array) */
 	AEXPR_OP_ALL,				/* scalar op ALL (array) */
 	AEXPR_DISTINCT,				/* IS DISTINCT FROM - name must be "=" */
@@ -388,6 +387,23 @@ typedef struct ResTarget
 } ResTarget;
 
 /*
+ * MultiAssignRef - element of a row source expression for UPDATE
+ *
+ * In an UPDATE target list, when we have SET (a,b,c) = row-valued-expression,
+ * we generate separate ResTarget items for each of a,b,c.  Their "val" trees
+ * are MultiAssignRef nodes numbered 1..n, linking to a common copy of the
+ * row-valued-expression (which parse analysis will process only once, when
+ * handling the MultiAssignRef with colno=1).
+ */
+typedef struct MultiAssignRef
+{
+	NodeTag		type;
+	Node	   *source;			/* the row-valued expression */
+	int			colno;			/* column number for this target (1..n) */
+	int			ncolumns;		/* number of targets in the construct */
+} MultiAssignRef;
+
+/*
  * SortBy - for ORDER BY clause
  */
 typedef struct SortBy
@@ -468,7 +484,7 @@ typedef struct RangeSubselect
  * RangeFunction - function call appearing in a FROM clause
  *
  * functions is a List because we use this to represent the construct
- * ROWS FROM(func1(...), func2(...), ...).	Each element of this list is a
+ * ROWS FROM(func1(...), func2(...), ...).  Each element of this list is a
  * two-element sublist, the first element being the untransformed function
  * call tree, and the second element being a possibly-empty list of ColumnDef
  * nodes representing any columndef list attached to that function within the
@@ -497,7 +513,7 @@ typedef struct RangeFunction
  * in either "raw" form (an untransformed parse tree) or "cooked" form
  * (a post-parse-analysis, executable expression tree), depending on
  * how this ColumnDef node was created (by parsing, or by inheritance
- * from an existing relation).	We should never have both in the same node!
+ * from an existing relation).  We should never have both in the same node!
  *
  * Similarly, we may have a COLLATE specification in either raw form
  * (represented as a CollateClause with arg==NULL) or cooked form
@@ -569,7 +585,7 @@ typedef struct IndexElem
 /*
  * DefElem - a generic "name = value" option definition
  *
- * In some contexts the name can be qualified.	Also, certain SQL commands
+ * In some contexts the name can be qualified.  Also, certain SQL commands
  * allow a SET/ADD/DROP action to be attached to option settings, so it's
  * convenient to carry a field for that too.  (Note: currently, it is our
  * practice that the grammar allows namespace and action only in statements
@@ -597,7 +613,7 @@ typedef struct DefElem
  * LockingClause - raw representation of FOR [NO KEY] UPDATE/[KEY] SHARE
  *		options
  *
- * Note: lockedRels == NIL means "all relations in query".	Otherwise it
+ * Note: lockedRels == NIL means "all relations in query".  Otherwise it
  * is a list of RangeVar nodes.  (We use RangeVar mainly because it carries
  * a location field --- currently, parse analysis insists on unqualified
  * names in LockingClause.)
@@ -616,7 +632,7 @@ typedef struct LockingClause
 	NodeTag		type;
 	List	   *lockedRels;		/* FOR [KEY] UPDATE/SHARE relations */
 	LockClauseStrength strength;
-	bool		noWait;			/* NOWAIT option */
+	LockWaitPolicy	waitPolicy;	/* NOWAIT and SKIP LOCKED */
 } LockingClause;
 
 /*
@@ -661,8 +677,8 @@ typedef struct XmlSerialize
  *
  *	  In RELATION RTEs, the colnames in both alias and eref are indexed by
  *	  physical attribute number; this means there must be colname entries for
- *	  dropped columns.	When building an RTE we insert empty strings ("") for
- *	  dropped columns.	Note however that a stored rule may have nonempty
+ *	  dropped columns.  When building an RTE we insert empty strings ("") for
+ *	  dropped columns.  Note however that a stored rule may have nonempty
  *	  colnames for columns dropped since the rule was created (and for that
  *	  matter the colnames might be out of date due to column renamings).
  *	  The same comments apply to FUNCTION RTEs when a function's return type
@@ -670,9 +686,9 @@ typedef struct XmlSerialize
  *
  *	  In JOIN RTEs, the colnames in both alias and eref are one-to-one with
  *	  joinaliasvars entries.  A JOIN RTE will omit columns of its inputs when
- *	  those columns are known to be dropped at parse time.	Again, however,
+ *	  those columns are known to be dropped at parse time.  Again, however,
  *	  a stored rule might contain entries for columns dropped since the rule
- *	  was created.	(This is only possible for columns not actually referenced
+ *	  was created.  (This is only possible for columns not actually referenced
  *	  in the rule.)  When loading a stored rule, we replace the joinaliasvars
  *	  items for any such columns with null pointers.  (We can't simply delete
  *	  them from the joinaliasvars list, because that would affect the attnums
@@ -691,7 +707,7 @@ typedef struct XmlSerialize
  *	  decompiled queries.
  *
  *	  requiredPerms and checkAsUser specify run-time access permissions
- *	  checks to be performed at query startup.	The user must have *all*
+ *	  checks to be performed at query startup.  The user must have *all*
  *	  of the permissions that are OR'd together in requiredPerms (zero
  *	  indicates no permissions checking).  If checkAsUser is not zero,
  *	  then do the permissions checks using the access rights of that user,
@@ -746,7 +762,7 @@ typedef struct RangeTblEntry
 	 * Fields valid for a join RTE (else NULL/zero):
 	 *
 	 * joinaliasvars is a list of (usually) Vars corresponding to the columns
-	 * of the join result.	An alias Var referencing column K of the join
+	 * of the join result.  An alias Var referencing column K of the join
 	 * result can be replaced by the K'th element of joinaliasvars --- but to
 	 * simplify the task of reverse-listing aliases correctly, we do not do
 	 * that until planning time.  In detail: an element of joinaliasvars can
@@ -801,6 +817,7 @@ typedef struct RangeTblEntry
 	Oid			checkAsUser;	/* if valid, check access as this role */
 	Bitmapset  *selectedCols;	/* columns needing SELECT permission */
 	Bitmapset  *modifiedCols;	/* columns needing INSERT/UPDATE permission */
+	List	   *securityQuals;	/* any security barrier quals to apply */
 } RangeTblEntry;
 
 /*
@@ -842,9 +859,9 @@ typedef struct RangeTblFunction
 typedef struct WithCheckOption
 {
 	NodeTag		type;
-	char	   *viewname;	/* name of view that specified the WCO */
-	Node	   *qual;		/* constraint qual to check */
-	bool		cascaded;	/* true = WITH CASCADED CHECK OPTION */
+	char	   *viewname;		/* name of view that specified the WCO */
+	Node	   *qual;			/* constraint qual to check */
+	bool		cascaded;		/* true = WITH CASCADED CHECK OPTION */
 } WithCheckOption;
 
 /*
@@ -855,7 +872,7 @@ typedef struct WithCheckOption
  * You might think that ORDER BY is only interested in defining ordering,
  * and GROUP/DISTINCT are only interested in defining equality.  However,
  * one way to implement grouping is to sort and then apply a "uniq"-like
- * filter.	So it's also interesting to keep track of possible sort operators
+ * filter.  So it's also interesting to keep track of possible sort operators
  * for GROUP/DISTINCT, and in particular to try to sort for the grouping
  * in a way that will also yield a requested ORDER BY ordering.  So we need
  * to be able to compare ORDER BY and GROUP/DISTINCT lists, which motivates
@@ -875,15 +892,15 @@ typedef struct WithCheckOption
  * here, but it's cheap to get it along with the sortop, and requiring it
  * to be valid eases comparisons to grouping items.)  Note that this isn't
  * actually enough information to determine an ordering: if the sortop is
- * collation-sensitive, a collation OID is needed too.	We don't store the
+ * collation-sensitive, a collation OID is needed too.  We don't store the
  * collation in SortGroupClause because it's not available at the time the
  * parser builds the SortGroupClause; instead, consult the exposed collation
  * of the referenced targetlist expression to find out what it is.
  *
- * In a grouping item, eqop must be valid.	If the eqop is a btree equality
+ * In a grouping item, eqop must be valid.  If the eqop is a btree equality
  * operator, then sortop should be set to a compatible ordering operator.
  * We prefer to set eqop/sortop/nulls_first to match any ORDER BY item that
- * the query presents for the same tlist item.	If there is none, we just
+ * the query presents for the same tlist item.  If there is none, we just
  * use the default ordering op for the datatype.
  *
  * If the tlist item's type has a hash opclass but no btree opclass, then
@@ -960,7 +977,7 @@ typedef struct RowMarkClause
 	NodeTag		type;
 	Index		rti;			/* range table index of target relation */
 	LockClauseStrength strength;
-	bool		noWait;			/* NOWAIT option */
+	LockWaitPolicy waitPolicy;	/* NOWAIT and SKIP LOCKED */
 	bool		pushedDown;		/* pushed down from higher query level? */
 } RowMarkClause;
 
@@ -1139,7 +1156,7 @@ typedef struct SelectStmt
  * range table.  Its setOperations field shows the tree of set operations,
  * with leaf SelectStmt nodes replaced by RangeTblRef nodes, and internal
  * nodes replaced by SetOperationStmt nodes.  Information about the output
- * column types is added, too.	(Note that the child nodes do not necessarily
+ * column types is added, too.  (Note that the child nodes do not necessarily
  * produce these types directly, but we've checked that their output types
  * can be coerced to the output column type.)  Also, if it's not UNION ALL,
  * information about the types' sort/group semantics is provided in the form
@@ -1209,6 +1226,7 @@ typedef enum ObjectType
 	OBJECT_OPCLASS,
 	OBJECT_OPERATOR,
 	OBJECT_OPFAMILY,
+	OBJECT_POLICY,
 	OBJECT_ROLE,
 	OBJECT_RULE,
 	OBJECT_SCHEMA,
@@ -1292,6 +1310,8 @@ typedef enum AlterTableType
 	AT_ChangeOwner,				/* change owner */
 	AT_ClusterOn,				/* CLUSTER ON */
 	AT_DropCluster,				/* SET WITHOUT CLUSTER */
+	AT_SetLogged,				/* SET LOGGED */
+	AT_SetUnLogged,				/* SET UNLOGGED */
 	AT_AddOids,					/* SET WITH OIDS */
 	AT_AddOidsRecurse,			/* internal to commands/tablecmds.c */
 	AT_DropOids,				/* SET WITHOUT OIDS */
@@ -1316,6 +1336,8 @@ typedef enum AlterTableType
 	AT_AddOf,					/* OF <type_name> */
 	AT_DropOf,					/* NOT OF */
 	AT_ReplicaIdentity,			/* REPLICA IDENTITY */
+	AT_EnableRowSecurity,		/* ENABLE ROW SECURITY */
+	AT_DisableRowSecurity,		/* DISABLE ROW SECURITY */
 	AT_GenericOptions			/* OPTIONS (...) */
 } AlterTableType;
 
@@ -1445,7 +1467,7 @@ typedef struct AccessPriv
  *
  * Note: because of the parsing ambiguity with the GRANT <privileges>
  * statement, granted_roles is a list of AccessPriv; the execution code
- * should complain if any column lists appear.	grantee_roles is a list
+ * should complain if any column lists appear.  grantee_roles is a list
  * of role names, as Value strings.
  * ----------------------
  */
@@ -1475,7 +1497,7 @@ typedef struct AlterDefaultPrivilegesStmt
  *		Copy Statement
  *
  * We support "COPY relation FROM file", "COPY relation TO file", and
- * "COPY (query) TO file".	In any given CopyStmt, exactly one of "relation"
+ * "COPY (query) TO file".  In any given CopyStmt, exactly one of "relation"
  * and "query" must be non-NULL.
  * ----------------------
  */
@@ -1574,7 +1596,7 @@ typedef struct CreateStmt
  *
  * If skip_validation is true then we skip checking that the existing rows
  * in the table satisfy the constraint, and just install the catalog entries
- * for the constraint.	A new FK constraint is marked as valid iff
+ * for the constraint.  A new FK constraint is marked as valid iff
  * initially_valid is true.  (Usually skip_validation and initially_valid
  * are inverses, but we can set both true if the table is known empty.)
  *
@@ -1652,6 +1674,7 @@ typedef struct Constraint
 	char		fk_upd_action;	/* ON UPDATE action */
 	char		fk_del_action;	/* ON DELETE action */
 	List	   *old_conpfeqop;	/* pg_constraint.conpfeqop of my former self */
+	Oid			old_pktable_oid;	/* pg_constraint.confrelid of my former self */
 
 	/* Fields used for constraints that allow a NOT VALID specification */
 	bool		skip_validation;	/* skip validation of existing rows? */
@@ -1687,16 +1710,15 @@ typedef struct AlterTableSpaceOptionsStmt
 	bool		isReset;
 } AlterTableSpaceOptionsStmt;
 
-typedef struct AlterTableSpaceMoveStmt
+typedef struct AlterTableMoveAllStmt
 {
 	NodeTag		type;
 	char	   *orig_tablespacename;
-	ObjectType	objtype;		/* set to -1 if move_all is true */
-	bool		move_all;		/* move all, or just objtype objects? */
+	ObjectType	objtype;		/* Object type to move */
 	List	   *roles;			/* List of roles to move objects of */
 	char	   *new_tablespacename;
 	bool		nowait;
-} AlterTableSpaceMoveStmt;
+} AlterTableMoveAllStmt;
 
 /* ----------------------
  *		Create/Alter Extension Statements
@@ -1775,7 +1797,7 @@ typedef struct AlterForeignServerStmt
 } AlterForeignServerStmt;
 
 /* ----------------------
- *		Create FOREIGN TABLE Statements
+ *		Create FOREIGN TABLE Statement
  * ----------------------
  */
 
@@ -1814,6 +1836,58 @@ typedef struct DropUserMappingStmt
 	char	   *servername;		/* server name */
 	bool		missing_ok;		/* ignore missing mappings */
 } DropUserMappingStmt;
+
+/* ----------------------
+ *		Import Foreign Schema Statement
+ * ----------------------
+ */
+
+typedef enum ImportForeignSchemaType
+{
+	FDW_IMPORT_SCHEMA_ALL,		/* all relations wanted */
+	FDW_IMPORT_SCHEMA_LIMIT_TO, /* include only listed tables in import */
+	FDW_IMPORT_SCHEMA_EXCEPT	/* exclude listed tables from import */
+} ImportForeignSchemaType;
+
+typedef struct ImportForeignSchemaStmt
+{
+	NodeTag		type;
+	char	   *server_name;	/* FDW server name */
+	char	   *remote_schema;	/* remote schema name to query */
+	char	   *local_schema;	/* local schema to create objects in */
+	ImportForeignSchemaType list_type;	/* type of table list */
+	List	   *table_list;		/* List of RangeVar */
+	List	   *options;		/* list of options to pass to FDW */
+} ImportForeignSchemaStmt;
+
+/*----------------------
+ *		Create POLICY Statement
+ *----------------------
+ */
+typedef struct CreatePolicyStmt
+{
+	NodeTag		type;
+	char	   *policy_name;	/* Policy's name */
+	RangeVar   *table;			/* the table name the policy applies to */
+	char	   *cmd;			/* the command name the policy applies to */
+	List	   *roles;			/* the roles associated with the policy */
+	Node	   *qual;			/* the policy's condition */
+	Node	   *with_check;		/* the policy's WITH CHECK condition. */
+} CreatePolicyStmt;
+
+/*----------------------
+ *		Alter POLICY Statement
+ *----------------------
+ */
+typedef struct AlterPolicyStmt
+{
+	NodeTag		type;
+	char	   *policy_name;	/* Policy's name */
+	RangeVar   *table;			/* the table name the policy applies to */
+	List	   *roles;			/* the roles associated with the policy */
+	Node	   *qual;			/* the policy's condition */
+	Node	   *with_check;		/* the policy's WITH CHECK condition. */
+} AlterPolicyStmt;
 
 /* ----------------------
  *		Create TRIGGER Statement
@@ -1939,6 +2013,7 @@ typedef struct CreateSeqStmt
 	RangeVar   *sequence;		/* the sequence to create */
 	List	   *options;
 	Oid			ownerId;		/* ID of owner, or InvalidOid for default */
+	bool		if_not_exists;	/* just do nothing if it already exists? */
 } CreateSeqStmt;
 
 typedef struct AlterSeqStmt
@@ -2092,7 +2167,7 @@ typedef struct SecLabelStmt
  *		Declare Cursor Statement
  *
  * Note: the "query" field of DeclareCursorStmt is only used in the raw grammar
- * output.	After parse analysis it's set to null, and the Query points to the
+ * output.  After parse analysis it's set to null, and the Query points to the
  * DeclareCursorStmt, not vice versa.
  * ----------------------
  */
@@ -2155,7 +2230,7 @@ typedef struct FetchStmt
  *
  * This represents creation of an index and/or an associated constraint.
  * If isconstraint is true, we should create a pg_constraint entry along
- * with the index.	But if indexOid isn't InvalidOid, we are not creating an
+ * with the index.  But if indexOid isn't InvalidOid, we are not creating an
  * index, just a UNIQUE/PKEY constraint using an existing index.  isconstraint
  * must always be true in this case, and the fields describing the index
  * properties are empty.
@@ -2432,7 +2507,7 @@ typedef struct ViewStmt
 	Node	   *query;			/* the SELECT query */
 	bool		replace;		/* replace an existing view? */
 	List	   *options;		/* options from WITH clause */
-	ViewCheckOption	withCheckOption; /* WITH CHECK OPTION */
+	ViewCheckOption withCheckOption;	/* WITH CHECK OPTION */
 } ViewStmt;
 
 /* ----------------------
@@ -2493,7 +2568,7 @@ typedef struct AlterSystemStmt
 {
 	NodeTag		type;
 	VariableSetStmt *setstmt;	/* SET subcommand */
-}	AlterSystemStmt;
+} AlterSystemStmt;
 
 /* ----------------------
  *		Cluster Statement (support pbrown's cluster index implementation)
@@ -2533,6 +2608,10 @@ typedef struct VacuumStmt
 	int			options;		/* OR of VacuumOption flags */
 	int			freeze_min_age; /* min freeze age, or -1 to use default */
 	int			freeze_table_age;		/* age at which to scan whole table */
+	int			multixact_freeze_min_age;		/* min multixact freeze age,
+												 * or -1 to use default */
+	int			multixact_freeze_table_age;		/* multixact age at which to
+												 * scan whole table */
 	RangeVar   *relation;		/* single table to process, or NULL */
 	List	   *va_cols;		/* list of column names, or NIL for all */
 } VacuumStmt;

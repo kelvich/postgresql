@@ -8,6 +8,9 @@
 #
 #-------------------------------------------------------------------------
 
+PGFILEDESC = "zic - time zone compiler"
+PGAPPICON = win32
+
 subdir = src/timezone
 top_builddir = ../..
 include $(top_builddir)/src/Makefile.global
@@ -16,11 +19,11 @@ include $(top_builddir)/src/Makefile.global
 OBJS= localtime.o strftime.o pgtz.o
 
 # files needed to build zic utility program
-ZICOBJS= zic.o ialloc.o scheck.o localtime.o
+ZICOBJS= zic.o ialloc.o scheck.o localtime.o $(WIN32RES)
 
 # timezone data files
 TZDATA = africa antarctica asia australasia europe northamerica southamerica \
-	pacificnew etcetera factory backward systemv solar87 solar88 solar89
+	pacificnew etcetera factory backward systemv
 TZDATAFILES = $(TZDATA:%=$(srcdir)/data/%)
 
 # which zone should determine the DST rules (not the specific UTC offset!)
@@ -40,8 +43,8 @@ endif
 
 # We could do this test in the action section:
 #	$(if $(ZIC),$(ZIC),./zic)
-# but gmake versions <= 3.78.1 or perhaps later have a bug
-# that causes a segfault;  gmake 3.81 or later fixes this.
+# but GNU make versions <= 3.78.1 or perhaps later have a bug
+# that causes a segfault;  GNU make 3.81 or later fixes this.
 ifeq (,$(ZIC))
 ZIC= ./zic
 endif

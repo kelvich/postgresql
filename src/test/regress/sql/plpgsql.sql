@@ -2078,8 +2078,6 @@ begin
 end;
 $$ language plpgsql;
 
-select raise_test1(5);
-
 create function raise_test2(int) returns int as $$
 begin
     raise notice 'This message has too few parameters: %, %, %', $1, $1;
@@ -2087,7 +2085,14 @@ begin
 end;
 $$ language plpgsql;
 
-select raise_test2(10);
+create function raise_test3(int) returns int as $$
+begin
+    raise notice 'This message has no parameters (despite having %% signs in it)!';
+    return $1;
+end;
+$$ language plpgsql;
+
+select raise_test3(1);
 
 -- Test re-RAISE inside a nested exception block.  This case is allowed
 -- by Oracle's PL/SQL but was handled differently by PG before 9.1.
@@ -2688,6 +2693,95 @@ begin
 end$$ language plpgsql;
 
 select footest();
+
+-- test warnings and errors
+set plpgsql.extra_warnings to 'all';
+set plpgsql.extra_warnings to 'none';
+set plpgsql.extra_errors to 'all';
+set plpgsql.extra_errors to 'none';
+
+-- test warnings when shadowing a variable
+
+set plpgsql.extra_warnings to 'shadowed_variables';
+
+-- simple shadowing of input and output parameters
+create or replace function shadowtest(in1 int)
+	returns table (out1 int) as $$
+declare
+in1 int;
+out1 int;
+begin
+end
+$$ language plpgsql;
+select shadowtest(1);
+
+set plpgsql.extra_warnings to 'shadowed_variables';
+select shadowtest(1);
+create or replace function shadowtest(in1 int)
+	returns table (out1 int) as $$
+declare
+in1 int;
+out1 int;
+begin
+end
+$$ language plpgsql;
+select shadowtest(1);
+drop function shadowtest(int);
+
+-- shadowing in a second DECLARE block
+create or replace function shadowtest()
+	returns void as $$
+declare
+f1 int;
+begin
+	declare
+	f1 int;
+	begin
+	end;
+end$$ language plpgsql;
+drop function shadowtest();
+
+-- several levels of shadowing
+create or replace function shadowtest(in1 int)
+	returns void as $$
+declare
+in1 int;
+begin
+	declare
+	in1 int;
+	begin
+	end;
+end$$ language plpgsql;
+drop function shadowtest(int);
+
+-- shadowing in cursor definitions
+create or replace function shadowtest()
+	returns void as $$
+declare
+f1 int;
+c1 cursor (f1 int) for select 1;
+begin
+end$$ language plpgsql;
+drop function shadowtest();
+
+-- test errors when shadowing a variable
+
+set plpgsql.extra_errors to 'shadowed_variables';
+
+create or replace function shadowtest(f1 int)
+	returns boolean as $$
+declare f1 int; begin return 1; end $$ language plpgsql;
+
+select shadowtest(1);
+
+reset plpgsql.extra_errors;
+reset plpgsql.extra_warnings;
+
+create or replace function shadowtest(f1 int)
+	returns boolean as $$
+declare f1 int; begin return 1; end $$ language plpgsql;
+
+select shadowtest(1);
 
 -- test scrollable cursor support
 

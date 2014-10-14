@@ -57,7 +57,7 @@ static void buildShSecLabels(PGconn *conn, const char *catalog_name,
 				 uint32 objectId, PQExpBuffer buffer,
 				 const char *target, const char *objname);
 static PGconn *connectDatabase(const char *dbname, const char *connstr, const char *pghost, const char *pgport,
-	  const char *pguser, enum trivalue prompt_password, bool fail_on_error);
+	  const char *pguser, trivalue prompt_password, bool fail_on_error);
 static char *constructConnStr(const char **keywords, const char **values);
 static PGresult *executeQuery(PGconn *conn, const char *query);
 static void executeCommand(PGconn *conn, const char *query);
@@ -73,6 +73,7 @@ static int	binary_upgrade = 0;
 static int	column_inserts = 0;
 static int	disable_dollar_quoting = 0;
 static int	disable_triggers = 0;
+static int	if_exists = 0;
 static int	inserts = 0;
 static int	no_tablespaces = 0;
 static int	use_setsessauth = 0;
@@ -119,6 +120,7 @@ main(int argc, char *argv[])
 		{"column-inserts", no_argument, &column_inserts, 1},
 		{"disable-dollar-quoting", no_argument, &disable_dollar_quoting, 1},
 		{"disable-triggers", no_argument, &disable_triggers, 1},
+		{"if-exists", no_argument, &if_exists, 1},
 		{"inserts", no_argument, &inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
 		{"no-tablespaces", no_argument, &no_tablespaces, 1},
@@ -136,7 +138,7 @@ main(int argc, char *argv[])
 	char	   *pguser = NULL;
 	char	   *pgdb = NULL;
 	char	   *use_role = NULL;
-	enum trivalue prompt_password = TRI_DEFAULT;
+	trivalue	prompt_password = TRI_DEFAULT;
 	bool		data_only = false;
 	bool		globals_only = false;
 	bool		output_clean = false;
@@ -193,7 +195,7 @@ main(int argc, char *argv[])
 
 	pgdumpopts = createPQExpBuffer();
 
-	while ((c = getopt_long(argc, argv, "acd:f:gh:i:l:oOp:rsS:tU:vwWx", long_options, &optindex)) != -1)
+	while ((c = getopt_long(argc, argv, "acd:f:gh:il:oOp:rsS:tU:vwWx", long_options, &optindex)) != -1)
 	{
 		switch (c)
 		{
@@ -334,6 +336,13 @@ main(int argc, char *argv[])
 		exit_nicely(1);
 	}
 
+	if (if_exists && !output_clean)
+	{
+		fprintf(stderr, _("%s: option --if-exists requires option -c/--clean\n"),
+				progname);
+		exit_nicely(1);
+	}
+
 	if (roles_only && tablespaces_only)
 	{
 		fprintf(stderr, _("%s: options -r/--roles-only and -t/--tablespaces-only cannot be used together\n"),
@@ -466,9 +475,9 @@ main(int argc, char *argv[])
 	if (!data_only)
 	{
 		/*
-		 * If asked to --clean, do that first.	We can avoid detailed
+		 * If asked to --clean, do that first.  We can avoid detailed
 		 * dependency analysis because databases never depend on each other,
-		 * and tablespaces never depend on each other.	Roles could have
+		 * and tablespaces never depend on each other.  Roles could have
 		 * grants to each other, but DROP ROLE will clean those up silently.
 		 */
 		if (output_clean)
@@ -564,6 +573,7 @@ help(void)
 	printf(_("  --column-inserts             dump data as INSERT commands with column names\n"));
 	printf(_("  --disable-dollar-quoting     disable dollar quoting, use SQL standard quoting\n"));
 	printf(_("  --disable-triggers           disable triggers during data-only restore\n"));
+	printf(_("  --if-exists                  use IF EXISTS when dropping objects\n"));
 	printf(_("  --inserts                    dump data as INSERT commands, rather than COPY\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
@@ -624,7 +634,9 @@ dropRoles(PGconn *conn)
 
 		rolename = PQgetvalue(res, i, i_rolname);
 
-		fprintf(OPF, "DROP ROLE %s;\n", fmtId(rolename));
+		fprintf(OPF, "DROP ROLE %s%s;\n",
+				if_exists ? "IF EXISTS " : "",
+				fmtId(rolename));
 	}
 
 	PQclear(res);
@@ -651,17 +663,29 @@ dumpRoles(PGconn *conn)
 				i_rolpassword,
 				i_rolvaliduntil,
 				i_rolreplication,
+				i_rolbypassrls,
 				i_rolcomment,
 				i_is_current_user;
 	int			i;
 
 	/* note: rolconfig is dumped later */
-	if (server_version >= 90100)
+	if (server_version >= 90500)
+		printfPQExpBuffer(buf,
+						  "SELECT oid, rolname, rolsuper, rolinherit, "
+						  "rolcreaterole, rolcreatedb, "
+						  "rolcanlogin, rolconnlimit, rolpassword, "
+						  "rolvaliduntil, rolreplication, rolbypassrls, "
+			 "pg_catalog.shobj_description(oid, 'pg_authid') as rolcomment, "
+						  "rolname = current_user AS is_current_user "
+						  "FROM pg_authid "
+						  "ORDER BY 2");
+	else if (server_version >= 90100)
 		printfPQExpBuffer(buf,
 						  "SELECT oid, rolname, rolsuper, rolinherit, "
 						  "rolcreaterole, rolcreatedb, "
 						  "rolcanlogin, rolconnlimit, rolpassword, "
 						  "rolvaliduntil, rolreplication, "
+						  "false as rolbypassrls, "
 			 "pg_catalog.shobj_description(oid, 'pg_authid') as rolcomment, "
 						  "rolname = current_user AS is_current_user "
 						  "FROM pg_authid "
@@ -672,6 +696,7 @@ dumpRoles(PGconn *conn)
 						  "rolcreaterole, rolcreatedb, "
 						  "rolcanlogin, rolconnlimit, rolpassword, "
 						  "rolvaliduntil, false as rolreplication, "
+						  "false as rolbypassrls, "
 			 "pg_catalog.shobj_description(oid, 'pg_authid') as rolcomment, "
 						  "rolname = current_user AS is_current_user "
 						  "FROM pg_authid "
@@ -682,6 +707,7 @@ dumpRoles(PGconn *conn)
 						  "rolcreaterole, rolcreatedb, "
 						  "rolcanlogin, rolconnlimit, rolpassword, "
 						  "rolvaliduntil, false as rolreplication, "
+						  "false as rolbypassrls, "
 						  "null as rolcomment, "
 						  "rolname = current_user AS is_current_user "
 						  "FROM pg_authid "
@@ -712,6 +738,7 @@ dumpRoles(PGconn *conn)
 						  "null::text as rolpassword, "
 						  "null::abstime as rolvaliduntil, "
 						  "false as rolreplication, "
+						  "false as rolbypassrls, "
 						  "null as rolcomment, false "
 						  "FROM pg_group "
 						  "WHERE NOT EXISTS (SELECT 1 FROM pg_shadow "
@@ -731,6 +758,7 @@ dumpRoles(PGconn *conn)
 	i_rolpassword = PQfnumber(res, "rolpassword");
 	i_rolvaliduntil = PQfnumber(res, "rolvaliduntil");
 	i_rolreplication = PQfnumber(res, "rolreplication");
+	i_rolbypassrls = PQfnumber(res, "rolbypassrls");
 	i_rolcomment = PQfnumber(res, "rolcomment");
 	i_is_current_user = PQfnumber(res, "is_current_user");
 
@@ -760,7 +788,7 @@ dumpRoles(PGconn *conn)
 		 * will acquire the right properties even if it already exists (ie, it
 		 * won't hurt for the CREATE to fail).  This is particularly important
 		 * for the role we are connected as, since even with --clean we will
-		 * have failed to drop it.	binary_upgrade cannot generate any errors,
+		 * have failed to drop it.  binary_upgrade cannot generate any errors,
 		 * so we assume the current role is already created.
 		 */
 		if (!binary_upgrade ||
@@ -797,6 +825,11 @@ dumpRoles(PGconn *conn)
 			appendPQExpBufferStr(buf, " REPLICATION");
 		else
 			appendPQExpBufferStr(buf, " NOREPLICATION");
+
+		if (strcmp(PQgetvalue(res, i, i_rolbypassrls), "t") == 0)
+			appendPQExpBufferStr(buf, " BYPASSRLS");
+		else
+			appendPQExpBufferStr(buf, " NOBYPASSRLS");
 
 		if (strcmp(PQgetvalue(res, i, i_rolconnlimit), "-1") != 0)
 			appendPQExpBuffer(buf, " CONNECTION LIMIT %s",
@@ -994,7 +1027,9 @@ dropTablespaces(PGconn *conn)
 	{
 		char	   *spcname = PQgetvalue(res, i, 0);
 
-		fprintf(OPF, "DROP TABLESPACE %s;\n", fmtId(spcname));
+		fprintf(OPF, "DROP TABLESPACE %s%s;\n",
+				if_exists ? "IF EXISTS " : "",
+				fmtId(spcname));
 	}
 
 	PQclear(res);
@@ -1148,7 +1183,9 @@ dropDBs(PGconn *conn)
 		if (strcmp(dbname, "template1") != 0 &&
 			strcmp(dbname, "postgres") != 0)
 		{
-			fprintf(OPF, "DROP DATABASE %s;\n", fmtId(dbname));
+			fprintf(OPF, "DROP DATABASE %s%s;\n",
+					if_exists ? "IF EXISTS " : "",
+					fmtId(dbname));
 		}
 	}
 
@@ -1186,7 +1223,7 @@ dumpCreateDB(PGconn *conn)
 	 * commands for just those databases with values different from defaults.
 	 *
 	 * We consider template0's encoding and locale (or, pre-7.1, template1's)
-	 * to define the installation default.	Pre-8.4 installations do not have
+	 * to define the installation default.  Pre-8.4 installations do not have
 	 * per-database locale settings; for them, every database must necessarily
 	 * be using the installation default, so there's no need to do anything
 	 * (which is good, since in very old versions there is no good way to find
@@ -1225,12 +1262,22 @@ dumpCreateDB(PGconn *conn)
 	PQclear(res);
 
 	/* Now collect all the information about databases to dump */
-	if (server_version >= 80400)
+	if (server_version >= 90300)
 		res = executeQuery(conn,
 						   "SELECT datname, "
 						   "coalesce(rolname, (select rolname from pg_authid where oid=(select datdba from pg_database where datname='template0'))), "
 						   "pg_encoding_to_char(d.encoding), "
-						   "datcollate, datctype, datfrozenxid, "
+						   "datcollate, datctype, datfrozenxid, datminmxid, "
+						   "datistemplate, datacl, datconnlimit, "
+						   "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
+			  "FROM pg_database d LEFT JOIN pg_authid u ON (datdba = u.oid) "
+						   "WHERE datallowconn ORDER BY 1");
+	else if (server_version >= 80400)
+		res = executeQuery(conn,
+						   "SELECT datname, "
+						   "coalesce(rolname, (select rolname from pg_authid where oid=(select datdba from pg_database where datname='template0'))), "
+						   "pg_encoding_to_char(d.encoding), "
+						   "datcollate, datctype, datfrozenxid, 0 AS datminmxid, "
 						   "datistemplate, datacl, datconnlimit, "
 						   "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
 			  "FROM pg_database d LEFT JOIN pg_authid u ON (datdba = u.oid) "
@@ -1240,7 +1287,7 @@ dumpCreateDB(PGconn *conn)
 						   "SELECT datname, "
 						   "coalesce(rolname, (select rolname from pg_authid where oid=(select datdba from pg_database where datname='template0'))), "
 						   "pg_encoding_to_char(d.encoding), "
-		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, "
+		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, 0 AS datminmxid, "
 						   "datistemplate, datacl, datconnlimit, "
 						   "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
 			  "FROM pg_database d LEFT JOIN pg_authid u ON (datdba = u.oid) "
@@ -1250,7 +1297,7 @@ dumpCreateDB(PGconn *conn)
 						   "SELECT datname, "
 						   "coalesce(usename, (select usename from pg_shadow where usesysid=(select datdba from pg_database where datname='template0'))), "
 						   "pg_encoding_to_char(d.encoding), "
-		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, "
+		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, 0 AS datminmxid, "
 						   "datistemplate, datacl, -1 as datconnlimit, "
 						   "(SELECT spcname FROM pg_tablespace t WHERE t.oid = d.dattablespace) AS dattablespace "
 		   "FROM pg_database d LEFT JOIN pg_shadow u ON (datdba = usesysid) "
@@ -1260,7 +1307,7 @@ dumpCreateDB(PGconn *conn)
 						   "SELECT datname, "
 						   "coalesce(usename, (select usename from pg_shadow where usesysid=(select datdba from pg_database where datname='template0'))), "
 						   "pg_encoding_to_char(d.encoding), "
-		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, "
+		   "null::text AS datcollate, null::text AS datctype, datfrozenxid, 0 AS datminmxid, "
 						   "datistemplate, datacl, -1 as datconnlimit, "
 						   "'pg_default' AS dattablespace "
 		   "FROM pg_database d LEFT JOIN pg_shadow u ON (datdba = usesysid) "
@@ -1272,7 +1319,7 @@ dumpCreateDB(PGconn *conn)
 					"(select usename from pg_shadow where usesysid=datdba), "
 						   "(select usename from pg_shadow where usesysid=(select datdba from pg_database where datname='template0'))), "
 						   "pg_encoding_to_char(d.encoding), "
-						   "null::text AS datcollate, null::text AS datctype, 0 AS datfrozenxid, "
+						   "null::text AS datcollate, null::text AS datctype, 0 AS datfrozenxid, 0 AS datminmxid, "
 						   "datistemplate, '' as datacl, -1 as datconnlimit, "
 						   "'pg_default' AS dattablespace "
 						   "FROM pg_database d "
@@ -1287,7 +1334,7 @@ dumpCreateDB(PGconn *conn)
 						   "SELECT datname, "
 					"(select usename from pg_shadow where usesysid=datdba), "
 						   "pg_encoding_to_char(d.encoding), "
-						   "null::text AS datcollate, null::text AS datctype, 0 AS datfrozenxid, "
+						   "null::text AS datcollate, null::text AS datctype, 0 AS datfrozenxid, 0 AS datminmxid, "
 						   "'f' as datistemplate, "
 						   "'' as datacl, -1 as datconnlimit, "
 						   "'pg_default' AS dattablespace "
@@ -1303,10 +1350,11 @@ dumpCreateDB(PGconn *conn)
 		char	   *dbcollate = PQgetvalue(res, i, 3);
 		char	   *dbctype = PQgetvalue(res, i, 4);
 		uint32		dbfrozenxid = atooid(PQgetvalue(res, i, 5));
-		char	   *dbistemplate = PQgetvalue(res, i, 6);
-		char	   *dbacl = PQgetvalue(res, i, 7);
-		char	   *dbconnlimit = PQgetvalue(res, i, 8);
-		char	   *dbtablespace = PQgetvalue(res, i, 9);
+		uint32		dbminmxid = atooid(PQgetvalue(res, i, 6));
+		char	   *dbistemplate = PQgetvalue(res, i, 7);
+		char	   *dbacl = PQgetvalue(res, i, 8);
+		char	   *dbconnlimit = PQgetvalue(res, i, 9);
+		char	   *dbtablespace = PQgetvalue(res, i, 10);
 		char	   *fdbname;
 
 		fdbname = pg_strdup(fmtId(dbname));
@@ -1358,26 +1406,22 @@ dumpCreateDB(PGconn *conn)
 				appendPQExpBuffer(buf, " TABLESPACE = %s",
 								  fmtId(dbtablespace));
 
+			if (strcmp(dbistemplate, "t") == 0)
+				appendPQExpBuffer(buf, " IS_TEMPLATE = true");
+
 			if (strcmp(dbconnlimit, "-1") != 0)
 				appendPQExpBuffer(buf, " CONNECTION LIMIT = %s",
 								  dbconnlimit);
 
 			appendPQExpBufferStr(buf, ";\n");
 
-			if (strcmp(dbistemplate, "t") == 0)
-			{
-				appendPQExpBufferStr(buf, "UPDATE pg_catalog.pg_database SET datistemplate = 't' WHERE datname = ");
-				appendStringLiteralConn(buf, dbname, conn);
-				appendPQExpBufferStr(buf, ";\n");
-			}
-
 			if (binary_upgrade)
 			{
-				appendPQExpBufferStr(buf, "-- For binary upgrade, set datfrozenxid.\n");
+				appendPQExpBufferStr(buf, "-- For binary upgrade, set datfrozenxid and datminmxid.\n");
 				appendPQExpBuffer(buf, "UPDATE pg_catalog.pg_database "
-								  "SET datfrozenxid = '%u' "
+								  "SET datfrozenxid = '%u', datminmxid = '%u' "
 								  "WHERE datname = ",
-								  dbfrozenxid);
+								  dbfrozenxid, dbminmxid);
 				appendStringLiteralConn(buf, dbname, conn);
 				appendPQExpBufferStr(buf, ";\n");
 			}
@@ -1650,7 +1694,7 @@ runPgDump(const char *dbname)
 	PQExpBuffer cmd = createPQExpBuffer();
 	int			ret;
 
-	appendPQExpBuffer(cmd, SYSTEMQUOTE "\"%s\" %s", pg_dump_bin,
+	appendPQExpBuffer(cmd, "\"%s\" %s", pg_dump_bin,
 					  pgdumpopts->data);
 
 	/*
@@ -1670,8 +1714,6 @@ runPgDump(const char *dbname)
 	doConnStrQuoting(connstrbuf, dbname);
 
 	doShellQuoting(cmd, connstrbuf->data);
-
-	appendPQExpBufferStr(cmd, SYSTEMQUOTE);
 
 	if (verbose)
 		fprintf(stderr, _("%s: running \"%s\"\n"), progname, cmd->data);
@@ -1723,7 +1765,7 @@ buildShSecLabels(PGconn *conn, const char *catalog_name, uint32 objectId,
 static PGconn *
 connectDatabase(const char *dbname, const char *connection_string,
 				const char *pghost, const char *pgport, const char *pguser,
-				enum trivalue prompt_password, bool fail_on_error)
+				trivalue prompt_password, bool fail_on_error)
 {
 	PGconn	   *conn;
 	bool		new_pass;
@@ -2018,22 +2060,10 @@ executeCommand(PGconn *conn, const char *query)
 static void
 dumpTimestamp(char *msg)
 {
-	char		buf[256];
+	char		buf[64];
 	time_t		now = time(NULL);
 
-	/*
-	 * We don't print the timezone on Win32, because the names are long and
-	 * localized, which means they may contain characters in various random
-	 * encodings; this has been seen to cause encoding errors when reading the
-	 * dump script.
-	 */
-	if (strftime(buf, sizeof(buf),
-#ifndef WIN32
-				 "%Y-%m-%d %H:%M:%S %Z",
-#else
-				 "%Y-%m-%d %H:%M:%S",
-#endif
-				 localtime(&now)) != 0)
+	if (strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S %z", localtime(&now)) != 0)
 		fprintf(OPF, "-- %s %s\n\n", msg, buf);
 }
 

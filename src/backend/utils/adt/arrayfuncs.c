@@ -15,8 +15,13 @@
 #include "postgres.h"
 
 #include <ctype.h>
+#ifdef _MSC_VER
+#include <float.h>				/* for _isnan */
+#endif
+#include <math.h>
 
 #include "access/htup_details.h"
+#include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "libpq/pqformat.h"
 #include "utils/array.h"
@@ -130,6 +135,15 @@ static ArrayType *array_replace_internal(ArrayType *array,
 					   Datum replace, bool replace_isnull,
 					   bool remove, Oid collation,
 					   FunctionCallInfo fcinfo);
+static int	width_bucket_array_float8(Datum operand, ArrayType *thresholds);
+static int width_bucket_array_fixed(Datum operand,
+						 ArrayType *thresholds,
+						 Oid collation,
+						 TypeCacheEntry *typentry);
+static int width_bucket_array_variable(Datum operand,
+							ArrayType *thresholds,
+							Oid collation,
+							TypeCacheEntry *typentry);
 
 
 /*
@@ -694,7 +708,7 @@ ReadArrayStr(char *arrayStr,
 
 	/*
 	 * We have to remove " and \ characters to create a clean item value to
-	 * pass to the datatype input routine.	We overwrite each item value
+	 * pass to the datatype input routine.  We overwrite each item value
 	 * in-place within arrayStr to do this.  srcptr is the current scan point,
 	 * and dstptr is where we are copying to.
 	 *
@@ -894,7 +908,7 @@ ReadArrayStr(char *arrayStr,
  * referenced by Datums after copying them.
  *
  * If the input data is of varlena type, the caller must have ensured that
- * the values are not toasted.	(Doing it here doesn't work since the
+ * the values are not toasted.  (Doing it here doesn't work since the
  * caller has already allocated space for the array...)
  */
 static void
@@ -1747,6 +1761,7 @@ Datum
 array_cardinality(PG_FUNCTION_ARGS)
 {
 	ArrayType  *v = PG_GETARG_ARRAYTYPE_P(0);
+
 	PG_RETURN_INT32(ArrayGetNItems(ARR_NDIM(v), ARR_DIMS(v)));
 }
 
@@ -2002,7 +2017,7 @@ array_get_slice(ArrayType *array,
 	memcpy(ARR_DIMS(newarray), span, ndim * sizeof(int));
 
 	/*
-	 * Lower bounds of the new array are set to 1.	Formerly (before 7.3) we
+	 * Lower bounds of the new array are set to 1.  Formerly (before 7.3) we
 	 * copied the given lowerIndx values ... but that seems confusing.
 	 */
 	newlb = ARR_LBOUND(newarray);
@@ -2634,7 +2649,7 @@ array_set_slice(ArrayType *array,
 /*
  * array_map()
  *
- * Map an array through an arbitrary function.	Return a new array with
+ * Map an array through an arbitrary function.  Return a new array with
  * same dimensions and each source element transformed by fn().  Each
  * source element is passed as the first argument to fn(); additional
  * arguments to be passed to fn() can be specified by the caller.
@@ -2649,9 +2664,9 @@ array_set_slice(ArrayType *array,
  *	 first argument position initially holds the input array value.
  * * inpType: OID of element type of input array.  This must be the same as,
  *	 or binary-compatible with, the first argument type of fn().
- * * retType: OID of element type of output array.	This must be the same as,
+ * * retType: OID of element type of output array.  This must be the same as,
  *	 or binary-compatible with, the result type of fn().
- * * amstate: workspace for array_map.	Must be zeroed by caller before
+ * * amstate: workspace for array_map.  Must be zeroed by caller before
  *	 first call, and not touched after that.
  *
  * It is legitimate to pass a freshly-zeroed ArrayMapState on each call,
@@ -3505,7 +3520,7 @@ array_cmp(FunctionCallInfo fcinfo)
 
 	/*
 	 * If arrays contain same data (up to end of shorter one), apply
-	 * additional rules to sort by dimensionality.	The relative significance
+	 * additional rules to sort by dimensionality.  The relative significance
 	 * of the different bits of information is historical; mainly we just care
 	 * that we don't say "equal" for arrays of different dimensionality.
 	 */
@@ -3767,7 +3782,7 @@ array_contain_compare(ArrayType *array1, ArrayType *array2, Oid collation,
 
 		/*
 		 * We assume that the comparison operator is strict, so a NULL can't
-		 * match anything.	XXX this diverges from the "NULL=NULL" behavior of
+		 * match anything.  XXX this diverges from the "NULL=NULL" behavior of
 		 * array_eq, should we act like that?
 		 */
 		if (isnull1)
@@ -4258,7 +4273,7 @@ array_copy(char *destptr, int nitems,
  *
  * Note: this could certainly be optimized using standard bitblt methods.
  * However, it's not clear that the typical Postgres array has enough elements
- * to make it worth worrying too much.	For the moment, KISS.
+ * to make it worth worrying too much.  For the moment, KISS.
  */
 void
 array_bitmap_copy(bits8 *destbitmap, int destoffset,
@@ -4455,7 +4470,7 @@ array_extract_slice(ArrayType *newarray,
  * Insert a slice into an array.
  *
  * ndim/dim[]/lb[] are dimensions of the original array.  A new array with
- * those same dimensions is to be constructed.	destArray must already
+ * those same dimensions is to be constructed.  destArray must already
  * have been allocated and its header initialized.
  *
  * st[]/endp[] identify the slice to be replaced.  Elements within the slice
@@ -5123,7 +5138,7 @@ array_unnest(PG_FUNCTION_ARGS)
 		 * Get the array value and detoast if needed.  We can't do this
 		 * earlier because if we have to detoast, we want the detoasted copy
 		 * to be in multi_call_memory_ctx, so it will go away when we're done
-		 * and not before.	(If no detoast happens, we assume the originally
+		 * and not before.  (If no detoast happens, we assume the originally
 		 * passed array will stick around till then.)
 		 */
 		arr = PG_GETARG_ARRAYTYPE_P(0);
@@ -5199,7 +5214,7 @@ array_unnest(PG_FUNCTION_ARGS)
  *
  * Find all array entries matching (not distinct from) search/search_isnull,
  * and delete them if remove is true, else replace them with
- * replace/replace_isnull.	Comparisons are done using the specified
+ * replace/replace_isnull.  Comparisons are done using the specified
  * collation.  fcinfo is passed only for caching purposes.
  */
 static ArrayType *
@@ -5271,7 +5286,7 @@ array_replace_internal(ArrayType *array,
 	typalign = typentry->typalign;
 
 	/*
-	 * Detoast values if they are toasted.	The replacement value must be
+	 * Detoast values if they are toasted.  The replacement value must be
 	 * detoasted for insertion into the result array, while detoasting the
 	 * search value only once saves cycles.
 	 */
@@ -5500,4 +5515,236 @@ array_replace(PG_FUNCTION_ARGS)
 								   false, PG_GET_COLLATION(),
 								   fcinfo);
 	PG_RETURN_ARRAYTYPE_P(array);
+}
+
+/*
+ * Implements width_bucket(anyelement, anyarray).
+ *
+ * 'thresholds' is an array containing lower bound values for each bucket;
+ * these must be sorted from smallest to largest, or bogus results will be
+ * produced.  If N thresholds are supplied, the output is from 0 to N:
+ * 0 is for inputs < first threshold, N is for inputs >= last threshold.
+ */
+Datum
+width_bucket_array(PG_FUNCTION_ARGS)
+{
+	Datum		operand = PG_GETARG_DATUM(0);
+	ArrayType  *thresholds = PG_GETARG_ARRAYTYPE_P(1);
+	Oid			collation = PG_GET_COLLATION();
+	Oid			element_type = ARR_ELEMTYPE(thresholds);
+	int			result;
+
+	/* Check input */
+	if (ARR_NDIM(thresholds) > 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
+				 errmsg("thresholds must be one-dimensional array")));
+
+	if (array_contains_nulls(thresholds))
+		ereport(ERROR,
+				(errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+				 errmsg("thresholds array must not contain NULLs")));
+
+	/* We have a dedicated implementation for float8 data */
+	if (element_type == FLOAT8OID)
+		result = width_bucket_array_float8(operand, thresholds);
+	else
+	{
+		TypeCacheEntry *typentry;
+
+		/* Cache information about the input type */
+		typentry = (TypeCacheEntry *) fcinfo->flinfo->fn_extra;
+		if (typentry == NULL ||
+			typentry->type_id != element_type)
+		{
+			typentry = lookup_type_cache(element_type,
+										 TYPECACHE_CMP_PROC_FINFO);
+			if (!OidIsValid(typentry->cmp_proc_finfo.fn_oid))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				errmsg("could not identify a comparison function for type %s",
+					   format_type_be(element_type))));
+			fcinfo->flinfo->fn_extra = (void *) typentry;
+		}
+
+		/*
+		 * We have separate implementation paths for fixed- and variable-width
+		 * types, since indexing the array is a lot cheaper in the first case.
+		 */
+		if (typentry->typlen > 0)
+			result = width_bucket_array_fixed(operand, thresholds,
+											  collation, typentry);
+		else
+			result = width_bucket_array_variable(operand, thresholds,
+												 collation, typentry);
+	}
+
+	/* Avoid leaking memory when handed toasted input. */
+	PG_FREE_IF_COPY(thresholds, 1);
+
+	PG_RETURN_INT32(result);
+}
+
+/*
+ * width_bucket_array for float8 data.
+ */
+static int
+width_bucket_array_float8(Datum operand, ArrayType *thresholds)
+{
+	float8		op = DatumGetFloat8(operand);
+	float8	   *thresholds_data;
+	int			left;
+	int			right;
+
+	/*
+	 * Since we know the array contains no NULLs, we can just index it
+	 * directly.
+	 */
+	thresholds_data = (float8 *) ARR_DATA_PTR(thresholds);
+
+	left = 0;
+	right = ArrayGetNItems(ARR_NDIM(thresholds), ARR_DIMS(thresholds));
+
+	/*
+	 * If the probe value is a NaN, it's greater than or equal to all possible
+	 * threshold values (including other NaNs), so we need not search.  Note
+	 * that this would give the same result as searching even if the array
+	 * contains multiple NaNs (as long as they're correctly sorted), since the
+	 * loop logic will find the rightmost of multiple equal threshold values.
+	 */
+	if (isnan(op))
+		return right;
+
+	/* Find the bucket */
+	while (left < right)
+	{
+		int			mid = (left + right) / 2;
+
+		if (isnan(thresholds_data[mid]) || op < thresholds_data[mid])
+			right = mid;
+		else
+			left = mid + 1;
+	}
+
+	return left;
+}
+
+/*
+ * width_bucket_array for generic fixed-width data types.
+ */
+static int
+width_bucket_array_fixed(Datum operand,
+						 ArrayType *thresholds,
+						 Oid collation,
+						 TypeCacheEntry *typentry)
+{
+	char	   *thresholds_data;
+	int			typlen = typentry->typlen;
+	bool		typbyval = typentry->typbyval;
+	FunctionCallInfoData locfcinfo;
+	int			left;
+	int			right;
+
+	/*
+	 * Since we know the array contains no NULLs, we can just index it
+	 * directly.
+	 */
+	thresholds_data = (char *) ARR_DATA_PTR(thresholds);
+
+	InitFunctionCallInfoData(locfcinfo, &typentry->cmp_proc_finfo, 2,
+							 collation, NULL, NULL);
+
+	/* Find the bucket */
+	left = 0;
+	right = ArrayGetNItems(ARR_NDIM(thresholds), ARR_DIMS(thresholds));
+	while (left < right)
+	{
+		int			mid = (left + right) / 2;
+		char	   *ptr;
+		int32		cmpresult;
+
+		ptr = thresholds_data + mid * typlen;
+
+		locfcinfo.arg[0] = operand;
+		locfcinfo.arg[1] = fetch_att(ptr, typbyval, typlen);
+		locfcinfo.argnull[0] = false;
+		locfcinfo.argnull[1] = false;
+		locfcinfo.isnull = false;
+
+		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo));
+
+		if (cmpresult < 0)
+			right = mid;
+		else
+			left = mid + 1;
+	}
+
+	return left;
+}
+
+/*
+ * width_bucket_array for generic variable-width data types.
+ */
+static int
+width_bucket_array_variable(Datum operand,
+							ArrayType *thresholds,
+							Oid collation,
+							TypeCacheEntry *typentry)
+{
+	char	   *thresholds_data;
+	int			typlen = typentry->typlen;
+	bool		typbyval = typentry->typbyval;
+	char		typalign = typentry->typalign;
+	FunctionCallInfoData locfcinfo;
+	int			left;
+	int			right;
+
+	thresholds_data = (char *) ARR_DATA_PTR(thresholds);
+
+	InitFunctionCallInfoData(locfcinfo, &typentry->cmp_proc_finfo, 2,
+							 collation, NULL, NULL);
+
+	/* Find the bucket */
+	left = 0;
+	right = ArrayGetNItems(ARR_NDIM(thresholds), ARR_DIMS(thresholds));
+	while (left < right)
+	{
+		int			mid = (left + right) / 2;
+		char	   *ptr;
+		int			i;
+		int32		cmpresult;
+
+		/* Locate mid'th array element by advancing from left element */
+		ptr = thresholds_data;
+		for (i = left; i < mid; i++)
+		{
+			ptr = att_addlength_pointer(ptr, typlen, ptr);
+			ptr = (char *) att_align_nominal(ptr, typalign);
+		}
+
+		locfcinfo.arg[0] = operand;
+		locfcinfo.arg[1] = fetch_att(ptr, typbyval, typlen);
+		locfcinfo.argnull[0] = false;
+		locfcinfo.argnull[1] = false;
+		locfcinfo.isnull = false;
+
+		cmpresult = DatumGetInt32(FunctionCallInvoke(&locfcinfo));
+
+		if (cmpresult < 0)
+			right = mid;
+		else
+		{
+			left = mid + 1;
+
+			/*
+			 * Move the thresholds pointer to match new "left" index, so we
+			 * don't have to seek over those elements again.  This trick
+			 * ensures we do only O(N) array indexing work, not O(N^2).
+			 */
+			ptr = att_addlength_pointer(ptr, typlen, ptr);
+			thresholds_data = (char *) att_align_nominal(ptr, typalign);
+		}
+	}
+
+	return left;
 }

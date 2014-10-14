@@ -133,11 +133,15 @@ lnext:
 
 		test = heap_lock_tuple(erm->relation, &tuple,
 							   estate->es_output_cid,
-							   lockmode, erm->noWait, true,
+							   lockmode, erm->waitPolicy, true,
 							   &buffer, &hufd);
 		ReleaseBuffer(buffer);
 		switch (test)
 		{
+			case HeapTupleWouldBlock:
+				/* couldn't lock tuple in SKIP LOCKED mode */
+				goto lnext;
+
 			case HeapTupleSelfUpdated:
 
 				/*
@@ -171,18 +175,21 @@ lnext:
 
 				/* updated, so fetch and lock the updated version */
 				copyTuple = EvalPlanQualFetch(estate, erm->relation, lockmode,
-											  &hufd.ctid, hufd.xmax);
+											  erm->waitPolicy, &hufd.ctid, hufd.xmax);
 
 				if (copyTuple == NULL)
 				{
-					/* Tuple was deleted, so don't return it */
+					/*
+					 * Tuple was deleted; or it's locked and we're under SKIP
+					 * LOCKED policy, so don't return it
+					 */
 					goto lnext;
 				}
 				/* remember the actually locked tuple's TID */
 				tuple.t_self = copyTuple->t_self;
 
 				/*
-				 * Need to run a recheck subquery.	Initialize EPQ state if we
+				 * Need to run a recheck subquery.  Initialize EPQ state if we
 				 * didn't do so already.
 				 */
 				if (!epq_started)
@@ -213,7 +220,7 @@ lnext:
 	{
 		/*
 		 * First, fetch a copy of any rows that were successfully locked
-		 * without any update having occurred.	(We do this in a separate pass
+		 * without any update having occurred.  (We do this in a separate pass
 		 * so as to avoid overhead in the common case where there are no
 		 * concurrent updates.)
 		 */
@@ -318,7 +325,7 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 
 	/*
 	 * Locate the ExecRowMark(s) that this node is responsible for, and
-	 * construct ExecAuxRowMarks for them.	(InitPlan should already have
+	 * construct ExecAuxRowMarks for them.  (InitPlan should already have
 	 * built the global list of ExecRowMarks.)
 	 */
 	lrstate->lr_arowMarks = NIL;
@@ -340,7 +347,7 @@ ExecInitLockRows(LockRows *node, EState *estate, int eflags)
 		aerm = ExecBuildAuxRowMark(erm, outerPlan->targetlist);
 
 		/*
-		 * Only locking rowmarks go into our own list.	Non-locking marks are
+		 * Only locking rowmarks go into our own list.  Non-locking marks are
 		 * passed off to the EvalPlanQual machinery.  This is because we don't
 		 * want to bother fetching non-locked rows unless we actually have to
 		 * do an EPQ recheck.

@@ -11,7 +11,7 @@
  * be handled easily in a simple depth-first traversal.
  *
  * Currently, in fact, equal() doesn't know how to compare Plan trees
- * either.	This might need to be fixed someday.
+ * either.  This might need to be fixed someday.
  *
  * NOTE: it is intentional that parse location fields (in nodes that have
  * one) are not compared.  This is because we want, for example, a variable
@@ -34,8 +34,8 @@
 
 
 /*
- * Macros to simplify comparison of different kinds of fields.	Use these
- * wherever possible to reduce the chance for silly typos.	Note that these
+ * Macros to simplify comparison of different kinds of fields.  Use these
+ * wherever possible to reduce the chance for silly typos.  Note that these
  * hard-wire the convention that the local variables in an Equal routine are
  * named 'a' and 'b'.
  */
@@ -131,7 +131,7 @@ _equalIntoClause(const IntoClause *a, const IntoClause *b)
 
 /*
  * We don't need an _equalExpr because Expr is an abstract supertype which
- * should never actually get instantiated.	Also, since it has no common
+ * should never actually get instantiated.  Also, since it has no common
  * fields except NodeTag, there's no need for a helper routine to factor
  * out comparing the common fields...
  */
@@ -382,6 +382,7 @@ static bool
 _equalSubLink(const SubLink *a, const SubLink *b)
 {
 	COMPARE_SCALAR_FIELD(subLinkType);
+	COMPARE_SCALAR_FIELD(subLinkId);
 	COMPARE_NODE_FIELD(testexpr);
 	COMPARE_NODE_FIELD(operName);
 	COMPARE_NODE_FIELD(subselect);
@@ -764,9 +765,9 @@ static bool
 _equalPlaceHolderVar(const PlaceHolderVar *a, const PlaceHolderVar *b)
 {
 	/*
-	 * We intentionally do not compare phexpr.	Two PlaceHolderVars with the
+	 * We intentionally do not compare phexpr.  Two PlaceHolderVars with the
 	 * same ID and levelsup should be considered equal even if the contained
-	 * expressions have managed to mutate to different states.	This will
+	 * expressions have managed to mutate to different states.  This will
 	 * happen during final plan construction when there are nested PHVs, since
 	 * the inner PHV will get replaced by a Param in some copies of the outer
 	 * PHV.  Another way in which it can happen is that initplan sublinks
@@ -856,6 +857,7 @@ _equalQuery(const Query *a, const Query *b)
 	COMPARE_SCALAR_FIELD(hasRecursive);
 	COMPARE_SCALAR_FIELD(hasModifyingCTE);
 	COMPARE_SCALAR_FIELD(hasForUpdate);
+	COMPARE_SCALAR_FIELD(hasRowSecurity);
 	COMPARE_NODE_FIELD(cteList);
 	COMPARE_NODE_FIELD(rtable);
 	COMPARE_NODE_FIELD(jointree);
@@ -1503,6 +1505,8 @@ _equalVacuumStmt(const VacuumStmt *a, const VacuumStmt *b)
 	COMPARE_SCALAR_FIELD(options);
 	COMPARE_SCALAR_FIELD(freeze_min_age);
 	COMPARE_SCALAR_FIELD(freeze_table_age);
+	COMPARE_SCALAR_FIELD(multixact_freeze_min_age);
+	COMPARE_SCALAR_FIELD(multixact_freeze_table_age);
 	COMPARE_NODE_FIELD(relation);
 	COMPARE_NODE_FIELD(va_cols);
 
@@ -1549,7 +1553,7 @@ _equalReplicaIdentityStmt(const ReplicaIdentityStmt *a, const ReplicaIdentityStm
 }
 
 static bool
-_equalAlterSystemStmt(const AlterSystemStmt * a, const AlterSystemStmt * b)
+_equalAlterSystemStmt(const AlterSystemStmt *a, const AlterSystemStmt *b)
 {
 	COMPARE_NODE_FIELD(setstmt);
 
@@ -1563,6 +1567,7 @@ _equalCreateSeqStmt(const CreateSeqStmt *a, const CreateSeqStmt *b)
 	COMPARE_NODE_FIELD(sequence);
 	COMPARE_NODE_FIELD(options);
 	COMPARE_SCALAR_FIELD(ownerId);
+	COMPARE_SCALAR_FIELD(if_not_exists);
 
 	return true;
 }
@@ -1636,12 +1641,11 @@ _equalAlterTableSpaceOptionsStmt(const AlterTableSpaceOptionsStmt *a,
 }
 
 static bool
-_equalAlterTableSpaceMoveStmt(const AlterTableSpaceMoveStmt *a,
-							  const AlterTableSpaceMoveStmt *b)
+_equalAlterTableMoveAllStmt(const AlterTableMoveAllStmt *a,
+							const AlterTableMoveAllStmt *b)
 {
 	COMPARE_STRING_FIELD(orig_tablespacename);
 	COMPARE_SCALAR_FIELD(objtype);
-	COMPARE_SCALAR_FIELD(move_all);
 	COMPARE_NODE_FIELD(roles);
 	COMPARE_STRING_FIELD(new_tablespacename);
 	COMPARE_SCALAR_FIELD(nowait);
@@ -1766,6 +1770,19 @@ _equalCreateForeignTableStmt(const CreateForeignTableStmt *a, const CreateForeig
 }
 
 static bool
+_equalImportForeignSchemaStmt(const ImportForeignSchemaStmt *a, const ImportForeignSchemaStmt *b)
+{
+	COMPARE_STRING_FIELD(server_name);
+	COMPARE_STRING_FIELD(remote_schema);
+	COMPARE_STRING_FIELD(local_schema);
+	COMPARE_SCALAR_FIELD(list_type);
+	COMPARE_NODE_FIELD(table_list);
+	COMPARE_NODE_FIELD(options);
+
+	return true;
+}
+
+static bool
 _equalCreateTrigStmt(const CreateTrigStmt *a, const CreateTrigStmt *b)
 {
 	COMPARE_STRING_FIELD(trigname);
@@ -1789,7 +1806,7 @@ static bool
 _equalCreateEventTrigStmt(const CreateEventTrigStmt *a, const CreateEventTrigStmt *b)
 {
 	COMPARE_STRING_FIELD(trigname);
-	COMPARE_SCALAR_FIELD(eventname);
+	COMPARE_STRING_FIELD(eventname);
 	COMPARE_NODE_FIELD(funcname);
 	COMPARE_NODE_FIELD(whenclause);
 
@@ -1992,6 +2009,31 @@ _equalAlterTSConfigurationStmt(const AlterTSConfigurationStmt *a,
 }
 
 static bool
+_equalCreatePolicyStmt(const CreatePolicyStmt *a, const CreatePolicyStmt *b)
+{
+	COMPARE_STRING_FIELD(policy_name);
+	COMPARE_NODE_FIELD(table);
+	COMPARE_SCALAR_FIELD(cmd);
+	COMPARE_NODE_FIELD(roles);
+	COMPARE_NODE_FIELD(qual);
+	COMPARE_NODE_FIELD(with_check);
+
+	return true;
+}
+
+static bool
+_equalAlterPolicyStmt(const AlterPolicyStmt *a, const AlterPolicyStmt *b)
+{
+	COMPARE_STRING_FIELD(policy_name);
+	COMPARE_NODE_FIELD(table);
+	COMPARE_NODE_FIELD(roles);
+	COMPARE_NODE_FIELD(qual);
+	COMPARE_NODE_FIELD(with_check);
+
+	return true;
+}
+
+static bool
 _equalAExpr(const A_Expr *a, const A_Expr *b)
 {
 	COMPARE_SCALAR_FIELD(kind);
@@ -2088,6 +2130,16 @@ _equalResTarget(const ResTarget *a, const ResTarget *b)
 	COMPARE_NODE_FIELD(indirection);
 	COMPARE_NODE_FIELD(val);
 	COMPARE_LOCATION_FIELD(location);
+
+	return true;
+}
+
+static bool
+_equalMultiAssignRef(const MultiAssignRef *a, const MultiAssignRef *b)
+{
+	COMPARE_NODE_FIELD(source);
+	COMPARE_SCALAR_FIELD(colno);
+	COMPARE_SCALAR_FIELD(ncolumns);
 
 	return true;
 }
@@ -2237,6 +2289,7 @@ _equalConstraint(const Constraint *a, const Constraint *b)
 	COMPARE_SCALAR_FIELD(fk_upd_action);
 	COMPARE_SCALAR_FIELD(fk_del_action);
 	COMPARE_NODE_FIELD(old_conpfeqop);
+	COMPARE_SCALAR_FIELD(old_pktable_oid);
 	COMPARE_SCALAR_FIELD(skip_validation);
 	COMPARE_SCALAR_FIELD(initially_valid);
 
@@ -2259,7 +2312,7 @@ _equalLockingClause(const LockingClause *a, const LockingClause *b)
 {
 	COMPARE_NODE_FIELD(lockedRels);
 	COMPARE_SCALAR_FIELD(strength);
-	COMPARE_SCALAR_FIELD(noWait);
+	COMPARE_SCALAR_FIELD(waitPolicy);
 
 	return true;
 }
@@ -2293,6 +2346,7 @@ _equalRangeTblEntry(const RangeTblEntry *a, const RangeTblEntry *b)
 	COMPARE_SCALAR_FIELD(checkAsUser);
 	COMPARE_BITMAPSET_FIELD(selectedCols);
 	COMPARE_BITMAPSET_FIELD(modifiedCols);
+	COMPARE_NODE_FIELD(securityQuals);
 
 	return true;
 }
@@ -2354,7 +2408,7 @@ _equalRowMarkClause(const RowMarkClause *a, const RowMarkClause *b)
 {
 	COMPARE_SCALAR_FIELD(rti);
 	COMPARE_SCALAR_FIELD(strength);
-	COMPARE_SCALAR_FIELD(noWait);
+	COMPARE_SCALAR_FIELD(waitPolicy);
 	COMPARE_SCALAR_FIELD(pushedDown);
 
 	return true;
@@ -2892,8 +2946,8 @@ equal(const void *a, const void *b)
 		case T_AlterTableSpaceOptionsStmt:
 			retval = _equalAlterTableSpaceOptionsStmt(a, b);
 			break;
-		case T_AlterTableSpaceMoveStmt:
-			retval = _equalAlterTableSpaceMoveStmt(a, b);
+		case T_AlterTableMoveAllStmt:
+			retval = _equalAlterTableMoveAllStmt(a, b);
 			break;
 		case T_CreateExtensionStmt:
 			retval = _equalCreateExtensionStmt(a, b);
@@ -2927,6 +2981,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_CreateForeignTableStmt:
 			retval = _equalCreateForeignTableStmt(a, b);
+			break;
+		case T_ImportForeignSchemaStmt:
+			retval = _equalImportForeignSchemaStmt(a, b);
 			break;
 		case T_CreateTrigStmt:
 			retval = _equalCreateTrigStmt(a, b);
@@ -2994,7 +3051,12 @@ equal(const void *a, const void *b)
 		case T_AlterTSConfigurationStmt:
 			retval = _equalAlterTSConfigurationStmt(a, b);
 			break;
-
+		case T_CreatePolicyStmt:
+			retval = _equalCreatePolicyStmt(a, b);
+			break;
+		case T_AlterPolicyStmt:
+			retval = _equalAlterPolicyStmt(a, b);
+			break;
 		case T_A_Expr:
 			retval = _equalAExpr(a, b);
 			break;
@@ -3024,6 +3086,9 @@ equal(const void *a, const void *b)
 			break;
 		case T_ResTarget:
 			retval = _equalResTarget(a, b);
+			break;
+		case T_MultiAssignRef:
+			retval = _equalMultiAssignRef(a, b);
 			break;
 		case T_TypeCast:
 			retval = _equalTypeCast(a, b);

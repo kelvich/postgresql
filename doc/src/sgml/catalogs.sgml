@@ -239,6 +239,11 @@
      </row>
 
      <row>
+      <entry><link linkend="catalog-pg-rowsecurity"><structname>pg_rowsecurity</structname></link></entry>
+      <entry>table row-level security policies</entry>
+     </row>
+
+     <row>
       <entry><link linkend="catalog-pg-seclabel"><structname>pg_seclabel</structname></link></entry>
       <entry>security labels on database objects</entry>
      </row>
@@ -387,6 +392,36 @@
       <entry>Final function (zero if none)</entry>
      </row>
      <row>
+      <entry><structfield>aggmtransfn</structfield></entry>
+      <entry><type>regproc</type></entry>
+      <entry><literal><link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.oid</literal></entry>
+      <entry>Forward transition function for moving-aggregate mode (zero if none)</entry>
+     </row>
+     <row>
+      <entry><structfield>aggminvtransfn</structfield></entry>
+      <entry><type>regproc</type></entry>
+      <entry><literal><link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.oid</literal></entry>
+      <entry>Inverse transition function for moving-aggregate mode (zero if none)</entry>
+     </row>
+     <row>
+      <entry><structfield>aggmfinalfn</structfield></entry>
+      <entry><type>regproc</type></entry>
+      <entry><literal><link linkend="catalog-pg-proc"><structname>pg_proc</structname></link>.oid</literal></entry>
+      <entry>Final function for moving-aggregate mode (zero if none)</entry>
+     </row>
+     <row>
+      <entry><structfield>aggfinalextra</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>True to pass extra dummy arguments to <structfield>aggfinalfn</structfield></entry>
+     </row>
+     <row>
+      <entry><structfield>aggmfinalextra</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>True to pass extra dummy arguments to <structfield>aggmfinalfn</structfield></entry>
+     </row>
+     <row>
       <entry><structfield>aggsortop</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-operator"><structname>pg_operator</structname></link>.oid</literal></entry>
@@ -406,6 +441,20 @@
        data, or zero to use a default estimate</entry>
      </row>
      <row>
+      <entry><structfield>aggmtranstype</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-type"><structname>pg_type</structname></link>.oid</literal></entry>
+      <entry>Data type of the aggregate function's internal transition (state)
+       data for moving-aggregate mode (zero if none)</entry>
+     </row>
+     <row>
+      <entry><structfield>aggmtransspace</structfield></entry>
+      <entry><type>int4</type></entry>
+      <entry></entry>
+      <entry>Approximate average size (in bytes) of the transition state data
+       for moving-aggregate mode, or zero to use a default estimate</entry>
+     </row>
+     <row>
       <entry><structfield>agginitval</structfield></entry>
       <entry><type>text</type></entry>
       <entry></entry>
@@ -413,6 +462,17 @@
        The initial value of the transition state.  This is a text
        field containing the initial value in its external string
        representation.  If this field is null, the transition state
+       value starts out null.
+      </entry>
+     </row>
+     <row>
+      <entry><structfield>aggminitval</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>
+       The initial value of the transition state for moving-aggregate mode.
+       This is a text field containing the initial value in its external
+       string representation.  If this field is null, the transition state
        value starts out null.
       </entry>
      </row>
@@ -783,7 +843,7 @@
       <entry><structfield>amopsortfamily</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-opfamily"><structname>pg_opfamily</structname></link>.oid</literal></entry>
-      <entry>The btree operator family this entry sorts according to, if an
+      <entry>The B-tree operator family this entry sorts according to, if an
        ordering operator; zero if a search operator</entry>
      </row>
 
@@ -798,7 +858,7 @@
    <replaceable>indexed_column</>
    <replaceable>operator</>
    <replaceable>constant</>.
-   Obviously, such an operator must return boolean, and its left-hand input
+   Obviously, such an operator must return <type>boolean</type>, and its left-hand input
    type must match the index's column data type.
   </para>
 
@@ -813,13 +873,13 @@
    its left-hand input type must match the index's column data type.
    The exact semantics of the <literal>ORDER BY</> are specified by the
    <structfield>amopsortfamily</structfield> column, which must reference
-   a btree operator family for the operator's result type.
+   a B-tree operator family for the operator's result type.
   </para>
 
   <note>
    <para>
     At present, it's assumed that the sort order for an ordering operator
-    is the default for the referenced opfamily, i.e., <literal>ASC NULLS
+    is the default for the referenced operator family, i.e., <literal>ASC NULLS
     LAST</>.  This might someday be relaxed by adding additional columns
     to specify sort options explicitly.
    </para>
@@ -919,7 +979,7 @@
    these match the input data type(s) of the support procedure itself, for
    others not.  There is a notion of <quote>default</> support procedures for
    an index, which are those with <structfield>amproclefttype</> and
-   <structfield>amprocrighttype</> both equal to the index opclass's
+   <structfield>amprocrighttype</> both equal to the index operator class's
    <structfield>opcintype</>.
   </para>
 
@@ -1167,8 +1227,7 @@
       <entry><type>bool</type></entry>
       <entry></entry>
       <entry>
-       This represents a not-null constraint.  It is possible to
-       change this column to enable or disable the constraint.
+       This represents a not-null constraint.
       </entry>
      </row>
 
@@ -1881,6 +1940,16 @@
      </row>
 
      <row>
+      <entry><structfield>relrowsecurity</structfield></entry>
+      <entry><type>bool</type></entry>
+      <entry></entry>
+      <entry>
+       True if table has row-security enabled; see
+       <link linkend="catalog-pg-rowsecurity"><structname>pg_rowsecurity</structname></link> catalog
+      </entry>
+     </row>
+
+     <row>
       <entry><structfield>relhassubclass</structfield></entry>
       <entry><type>bool</type></entry>
       <entry></entry>
@@ -1904,7 +1973,7 @@
        <literal>d</> = default (primary key, if any),
        <literal>n</> = nothing,
        <literal>f</> = all columns
-       <literal>i</> = index with indisreplident set, or default
+       <literal>i</> = index with <structfield>indisreplident</structfield> set, or default
       </entry>
      </row>
 
@@ -2538,10 +2607,10 @@
       <entry><type>bool</type></entry>
       <entry></entry>
       <entry>
-       If true then this database can be used in the
-       <literal>TEMPLATE</literal> clause of <command>CREATE
-       DATABASE</command> to create a new database as a clone of
-       this one
+       If true, then this database can be cloned by
+       any user with <literal>CREATEDB</> privileges;
+       if false, then only superusers or the owner of
+       the database can clone it.
       </entry>
      </row>
 
@@ -5177,7 +5246,7 @@
 
   <para>
    For more on replication slots,
-   see <xref linkend="streaming-replication-slots">.
+   see <xref linkend="streaming-replication-slots"> and <xref linkend="logicaldecoding">.
   </para>
 
   <table>
@@ -5197,9 +5266,16 @@
     <tbody>
      <row>
       <entry><structfield>slot_name</structfield></entry>
-      <entry><type>text</type></entry>
+      <entry><type>name</type></entry>
       <entry></entry>
       <entry>A unique, cluster-wide identifier for the replication slot</entry>
+     </row>
+
+     <row>
+      <entry><structfield>plugin</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>The base name of the shared object containing the output plugin this logical slot is using, or null for physical slots.</entry>
      </row>
 
      <row>
@@ -5213,7 +5289,7 @@
       <entry><structfield>datoid</structfield></entry>
       <entry><type>oid</type></entry>
       <entry><literal><link linkend="catalog-pg-database"><structname>pg_database</structname></link>.oid</literal></entry>
-      <entry>The oid of the database this slot is associated with, or
+      <entry>The OID of the database this slot is associated with, or
       null. Only logical slots have an associated database.</entry>
      </row>
 
@@ -5243,8 +5319,18 @@
      </row>
 
      <row>
+      <entry><structfield>catalog_xmin</structfield></entry>
+      <entry><type>xid</type></entry>
+      <entry></entry>
+      <entry>The oldest transaction affecting the system catalogs that this
+      slot needs the database to retain.  <literal>VACUUM</literal> cannot
+      remove catalog tuples deleted by any later transaction.
+      </entry>
+     </row>
+
+     <row>
       <entry><structfield>restart_lsn</structfield></entry>
-      <entry><type>text</type></entry>
+      <entry><type>pg_lsn</type></entry>
       <entry></entry>
       <entry>The address (<literal>LSN</literal>) of oldest WAL which still
       might be required by the consumer of this slot and thus won't be
@@ -5256,6 +5342,93 @@
   </table>
  </sect1>
 
+ <sect1 id="catalog-pg-rowsecurity">
+  <title><structname>pg_rowsecurity</structname></title>
+
+  <indexterm zone="catalog-pg-rowsecurity">
+   <primary>pg_rowsecurity</primary>
+  </indexterm>
+
+  <para>
+   The catalog <structname>pg_rowsecurity</structname> stores row-level
+   security policies for each table.  A policy includes the kind of
+   command which it applies to (or all commands), the roles which it
+   applies to, the expression to be added as a security-barrier
+   qualification to queries which include the table and the expression
+   to be added as a with-check option for queries which attempt to add
+   new records to the table.
+  </para>
+
+  <table>
+
+   <title><structname>pg_rowsecurity</structname> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry><structfield>rsecpolname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry></entry>
+      <entry>The name of the row-security policy</entry>
+     </row>
+
+     <row>
+      <entry><structfield>rsecrelid</structfield></entry>
+      <entry><type>oid</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.oid</literal></entry>
+      <entry>The table to which the row-security policy belongs</entry>
+     </row>
+
+     <row>
+      <entry><structfield>rseccmd</structfield></entry>
+      <entry><type>char</type></entry>
+      <entry></entry>
+      <entry>The command type to which the row-security policy is applied.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>rsecroles</structfield></entry>
+      <entry><type>char</type></entry>
+      <entry></entry>
+      <entry>The roles to which the row-security policy is applied.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>rsecqual</structfield></entry>
+      <entry><type>pg_node_tree</type></entry>
+      <entry></entry>
+      <entry>The expression tree to be added to the security barrier qualifications for queries which use the table.</entry>
+     </row>
+
+     <row>
+      <entry><structfield>rsecwithcheck</structfield></entry>
+      <entry><type>pg_node_tree</type></entry>
+      <entry></entry>
+      <entry>The expression tree to be added to the with check qualifications for queries which attempt to add rows to the table.</entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+  <note>
+   <para>
+    <literal>pg_class.relrowsecurity</literal>
+    True if the table has row-security enabled.  Policies will not be applied
+    unless row-security is enabled on the table.
+   </para>
+  </note>
+
+ </sect1>
 
  <sect1 id="catalog-pg-seclabel">
   <title><structname>pg_seclabel</structname></title>
@@ -7133,6 +7306,11 @@
      </row>
 
      <row>
+      <entry><link linkend="view-pg-policies"><structname>pg_policies</structname></link></entry>
+      <entry>policies</entry>
+     </row>
+
+     <row>
       <entry><link linkend="view-pg-prepared-statements"><structname>pg_prepared_statements</structname></link></entry>
       <entry>prepared statements</entry>
      </row>
@@ -7846,16 +8024,27 @@
 
   <para>
    The <structfield>pid</structfield> column can be joined to the
-   <structfield>pid</structfield> column of the
-   <structname>pg_stat_activity</structname> view to get more
-   information on the session holding or waiting to hold each lock.
+   <structfield>pid</structfield> column of the <link
+   linkend="pg-stat-activity-view"><structname>pg_stat_activity</structname></link>
+   view to get more
+   information on the session holding or waiting to hold each lock,
+   for example
+<programlisting>
+SELECT * FROM pg_locks pl LEFT JOIN pg_stat_activity psa
+    ON pl.pid = psa.pid;
+</programlisting>
    Also, if you are using prepared transactions, the
-   <structfield>transaction</> column can be joined to the
-   <structfield>transaction</structfield> column of the
-   <structname>pg_prepared_xacts</structname> view to get more
-   information on prepared transactions that hold locks.
+   <structfield>virtualtransaction</> column can be joined to the
+   <structfield>transaction</structfield> column of the <link
+   linkend="view-pg-prepared-xacts"><structname>pg_prepared_xacts</structname></link>
+   view to get more information on prepared transactions that hold locks.
    (A prepared transaction can never be waiting for a lock,
    but it continues to hold the locks it acquired while running.)
+   For example:
+<programlisting>
+SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
+    ON pl.virtualtransaction = '-1/' || ppx.transaction;
+</programlisting>
   </para>
 
   <para>
@@ -7961,6 +8150,81 @@
       <entry><type>text</type></entry>
       <entry></entry>
       <entry>Materialized view definition (a reconstructed <command>SELECT</command> query)</entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+ </sect1>
+
+ <sect1 id="view-pg-policies">
+  <title><structname>pg_policies</structname></title>
+
+  <indexterm zone="view-pg-policies">
+   <primary>pg_policies</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_policies</structname> provides access to
+   useful information about each policy in the database.
+  </para>
+
+  <table>
+   <title><structname>pg_policies</> Columns</title>
+
+   <tgroup cols="4">
+    <thead>
+     <row>
+      <entry>Name</entry>
+      <entry>Type</entry>
+      <entry>References</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><structfield>schemaname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-namespace"><structname>pg_namespace</structname></link>.nspname</literal></entry>
+      <entry>Name of schema containing table policy is on</entry>
+     </row>
+     <row>
+      <entry><structfield>tablename</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.relname</literal></entry>
+      <entry>Name of table policy is on</entry>
+     </row>
+     <row>
+      <entry><structfield>policyname</structfield></entry>
+      <entry><type>name</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.relname</literal></entry>
+      <entry>Name of policy</entry>
+     </row>
+     <row>
+      <entry><structfield>cmd</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>The command type to which the policy is applied.</entry>
+     </row>
+     <row>
+      <entry><structfield>roles</structfield></entry>
+      <entry><type>name[]</type></entry>
+      <entry></entry>
+      <entry>The roles to which this policy applies.</entry>
+     </row>
+     <row>
+      <entry><structfield>qual</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>The expression added to the security barrier qualifications for
+      queries which this policy applies to.</entry>
+     </row>
+     <row>
+      <entry><structfield>with_check</structfield></entry>
+      <entry><type>text</type></entry>
+      <entry></entry>
+      <entry>The expression added to the with check qualifications for
+      queries which attempt to add rows to this table.</entry>
      </row>
     </tbody>
    </tgroup>
@@ -9049,6 +9313,12 @@
       <entry><type>boolean</type></entry>
       <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.relhastriggers</literal></entry>
       <entry>True if table has (or once had) triggers</entry>
+     </row>
+     <row>
+      <entry><structfield>rowsecurity</structfield></entry>
+      <entry><type>boolean</type></entry>
+      <entry><literal><link linkend="catalog-pg-class"><structname>pg_class</structname></link>.relrowsecurity</literal></entry>
+      <entry>True if row security is enabled on the table</entry>
      </row>
     </tbody>
    </tgroup>

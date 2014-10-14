@@ -28,7 +28,9 @@
 #include "utils/builtins.h"
 #include "utils/bytea.h"
 #include "utils/lsyscache.h"
+#include "utils/memutils.h"
 #include "utils/pg_locale.h"
+#include "utils/sortsupport.h"
 
 
 /* GUC variable */
@@ -50,12 +52,32 @@ typedef struct
 	int			skiptable[256]; /* skip distance for given mismatched char */
 } TextPositionState;
 
+typedef struct
+{
+	char			   *buf1;		/* 1st string */
+	char			   *buf2;		/* 2nd string */
+	int					buflen1;
+	int					buflen2;
+#ifdef HAVE_LOCALE_T
+	pg_locale_t locale;
+#endif
+} TextSortSupport;
+
+/*
+ * This should be large enough that most strings will fit, but small enough
+ * that we feel comfortable putting it on the stack
+ */
+#define TEXTBUFLEN		1024
+
 #define DatumGetUnknownP(X)			((unknown *) PG_DETOAST_DATUM(X))
 #define DatumGetUnknownPCopy(X)		((unknown *) PG_DETOAST_DATUM_COPY(X))
 #define PG_GETARG_UNKNOWN_P(n)		DatumGetUnknownP(PG_GETARG_DATUM(n))
 #define PG_GETARG_UNKNOWN_P_COPY(n) DatumGetUnknownPCopy(PG_GETARG_DATUM(n))
 #define PG_RETURN_UNKNOWN_P(x)		PG_RETURN_POINTER(x)
 
+static void btsortsupport_worker(SortSupport ssup, Oid collid);
+static int bttextfastcmp_c(Datum x, Datum y, SortSupport ssup);
+static int bttextfastcmp_locale(Datum x, Datum y, SortSupport ssup);
 static int32 text_length(Datum str);
 static text *text_catenate(text *t1, text *t2);
 static text *text_substring(Datum str,
@@ -591,7 +613,7 @@ textlen(PG_FUNCTION_ARGS)
  *	Does the real work for textlen()
  *
  *	This is broken out so it can be called directly by other string processing
- *	functions.	Note that the argument is passed as a Datum, to indicate that
+ *	functions.  Note that the argument is passed as a Datum, to indicate that
  *	it may still be in compressed form.  We can avoid decompressing it at all
  *	in some cases.
  */
@@ -763,7 +785,7 @@ text_substr_no_len(PG_FUNCTION_ARGS)
  *	Does the real work for text_substr() and text_substr_no_len()
  *
  *	This is broken out so it can be called directly by other string processing
- *	functions.	Note that the argument is passed as a Datum, to indicate that
+ *	functions.  Note that the argument is passed as a Datum, to indicate that
  *	it may still be in compressed/toasted form.  We can avoid detoasting all
  *	of it in some cases.
  *
@@ -1113,7 +1135,7 @@ text_position_setup(text *t1, text *t2, TextPositionState *state)
 	 * searched (t1) and the "needle" is the pattern being sought (t2).
 	 *
 	 * If the needle is empty or bigger than the haystack then there is no
-	 * point in wasting cycles initializing the table.	We also choose not to
+	 * point in wasting cycles initializing the table.  We also choose not to
 	 * use B-M-H for needles of length 1, since the skip table can't possibly
 	 * save anything in that case.
 	 */
@@ -1129,7 +1151,7 @@ text_position_setup(text *t1, text *t2, TextPositionState *state)
 		 * declaration of TextPositionState allows up to 256 elements, but for
 		 * short search problems we don't really want to have to initialize so
 		 * many elements --- it would take too long in comparison to the
-		 * actual search time.	So we choose a useful skip table size based on
+		 * actual search time.  So we choose a useful skip table size based on
 		 * the haystack length minus the needle length.  The closer the needle
 		 * length is to the haystack length the less useful skipping becomes.
 		 *
@@ -1161,7 +1183,7 @@ text_position_setup(text *t1, text *t2, TextPositionState *state)
 			state->skiptable[i] = len2;
 
 		/*
-		 * Now examine the needle.	For each character except the last one,
+		 * Now examine the needle.  For each character except the last one,
 		 * set the corresponding table element to the appropriate skip
 		 * distance.  Note that when two characters share the same skip table
 		 * entry, the one later in the needle must determine the skip
@@ -1249,11 +1271,11 @@ text_position_next(int start_pos, TextPositionState *state)
 
 				/*
 				 * No match, so use the haystack char at hptr to decide how
-				 * far to advance.	If the needle had any occurrence of that
+				 * far to advance.  If the needle had any occurrence of that
 				 * character (or more precisely, one sharing the same
 				 * skiptable entry) before its last character, then we advance
 				 * far enough to align the last such needle character with
-				 * that haystack position.	Otherwise we can advance by the
+				 * that haystack position.  Otherwise we can advance by the
 				 * whole needle length.
 				 */
 				hptr += state->skiptable[(unsigned char) *hptr & skiptablemask];
@@ -1305,11 +1327,11 @@ text_position_next(int start_pos, TextPositionState *state)
 
 				/*
 				 * No match, so use the haystack char at hptr to decide how
-				 * far to advance.	If the needle had any occurrence of that
+				 * far to advance.  If the needle had any occurrence of that
 				 * character (or more precisely, one sharing the same
 				 * skiptable entry) before its last character, then we advance
 				 * far enough to align the last such needle character with
-				 * that haystack position.	Otherwise we can advance by the
+				 * that haystack position.  Otherwise we can advance by the
 				 * whole needle length.
 				 */
 				hptr += state->skiptable[*hptr & skiptablemask];
@@ -1344,7 +1366,7 @@ varstr_cmp(char *arg1, int len1, char *arg2, int len2, Oid collid)
 
 	/*
 	 * Unfortunately, there is no strncoll(), so in the non-C locale case we
-	 * have to do some memory copying.	This turns out to be significantly
+	 * have to do some memory copying.  This turns out to be significantly
 	 * slower, so we optimize the case where LC_COLLATE is C.  We also try to
 	 * optimize relatively-short strings by avoiding palloc/pfree overhead.
 	 */
@@ -1356,10 +1378,8 @@ varstr_cmp(char *arg1, int len1, char *arg2, int len2, Oid collid)
 	}
 	else
 	{
-#define STACKBUFLEN		1024
-
-		char		a1buf[STACKBUFLEN];
-		char		a2buf[STACKBUFLEN];
+		char		a1buf[TEXTBUFLEN];
+		char		a2buf[TEXTBUFLEN];
 		char	   *a1p,
 				   *a2p;
 
@@ -1385,6 +1405,18 @@ varstr_cmp(char *arg1, int len1, char *arg2, int len2, Oid collid)
 #endif
 		}
 
+		/*
+		 * memcmp() can't tell us which of two unequal strings sorts first, but
+		 * it's a cheap way to tell if they're equal.  Testing shows that
+		 * memcmp() followed by strcoll() is only trivially slower than
+		 * strcoll() by itself, so we don't lose much if this doesn't work out
+		 * very often, and if it does - for example, because there are many
+		 * equal strings in the input - then we win big by avoiding expensive
+		 * collation-aware comparisons.
+		 */
+		if (len1 == len2 && memcmp(arg1, arg2, len1) == 0)
+			return 0;
+
 #ifdef WIN32
 		/* Win32 does not have UTF-8, so we need to map to UTF-16 */
 		if (GetDatabaseEncoding() == PG_UTF8)
@@ -1393,24 +1425,24 @@ varstr_cmp(char *arg1, int len1, char *arg2, int len2, Oid collid)
 			int			a2len;
 			int			r;
 
-			if (len1 >= STACKBUFLEN / 2)
+			if (len1 >= TEXTBUFLEN / 2)
 			{
 				a1len = len1 * 2 + 2;
 				a1p = palloc(a1len);
 			}
 			else
 			{
-				a1len = STACKBUFLEN;
+				a1len = TEXTBUFLEN;
 				a1p = a1buf;
 			}
-			if (len2 >= STACKBUFLEN / 2)
+			if (len2 >= TEXTBUFLEN / 2)
 			{
 				a2len = len2 * 2 + 2;
 				a2p = palloc(a2len);
 			}
 			else
 			{
-				a2len = STACKBUFLEN;
+				a2len = TEXTBUFLEN;
 				a2p = a2buf;
 			}
 
@@ -1475,11 +1507,11 @@ varstr_cmp(char *arg1, int len1, char *arg2, int len2, Oid collid)
 		}
 #endif   /* WIN32 */
 
-		if (len1 >= STACKBUFLEN)
+		if (len1 >= TEXTBUFLEN)
 			a1p = (char *) palloc(len1 + 1);
 		else
 			a1p = a1buf;
-		if (len2 >= STACKBUFLEN)
+		if (len2 >= TEXTBUFLEN)
 			a2p = (char *) palloc(len2 + 1);
 		else
 			a2p = a2buf;
@@ -1683,6 +1715,194 @@ bttextcmp(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(result);
 }
 
+Datum
+bttextsortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport		ssup = (SortSupport) PG_GETARG_POINTER(0);
+	Oid				collid = ssup->ssup_collation;
+	MemoryContext	oldcontext;
+
+	oldcontext = MemoryContextSwitchTo(ssup->ssup_cxt);
+
+	btsortsupport_worker(ssup, collid);
+
+	MemoryContextSwitchTo(oldcontext);
+
+	PG_RETURN_VOID();
+}
+
+static void
+btsortsupport_worker(SortSupport ssup, Oid collid)
+{
+	TextSortSupport	   *tss;
+
+	/*
+	 * If LC_COLLATE = C, we can make things quite a bit faster by using
+	 * memcmp() rather than strcoll().  To minimize the per-comparison
+	 * overhead, we make this decision just once for the whole sort.
+	 */
+	if (lc_collate_is_c(collid))
+	{
+		ssup->comparator = bttextfastcmp_c;
+		return;
+	}
+
+	/*
+	 * WIN32 requires complex hacks when the database encoding is UTF-8 (except
+	 * when using the "C" collation).  For now, we don't optimize that case.
+	 */
+#ifdef WIN32
+	if (GetDatabaseEncoding() == PG_UTF8)
+		return;
+#endif
+
+	/*
+	 * We may need a collation-sensitive comparison.  To make things faster,
+	 * we'll figure out the collation based on the locale id and cache the
+	 * result.  Also, since strxfrm()/strcoll() require NUL-terminated inputs,
+	 * prepare one or two palloc'd buffers to use as temporary workspace.  In
+	 * the ad-hoc comparison case we only use palloc'd buffers when we need
+	 * more space than we're comfortable allocating on the stack, but here we
+	 * can keep the buffers around for the whole sort, so it makes sense to
+	 * allocate them once and use them unconditionally.
+	 */
+	tss = palloc(sizeof(TextSortSupport));
+#ifdef HAVE_LOCALE_T
+	tss->locale = 0;
+#endif
+
+	if (collid != DEFAULT_COLLATION_OID)
+	{
+		if (!OidIsValid(collid))
+		{
+			/*
+			 * This typically means that the parser could not resolve a
+			 * conflict of implicit collations, so report it that way.
+			 */
+			ereport(ERROR,
+					(errcode(ERRCODE_INDETERMINATE_COLLATION),
+					 errmsg("could not determine which collation to use for string comparison"),
+					 errhint("Use the COLLATE clause to set the collation explicitly.")));
+		}
+#ifdef HAVE_LOCALE_T
+		tss->locale = pg_newlocale_from_collation(collid);
+#endif
+	}
+
+	tss->buf1 = palloc(TEXTBUFLEN);
+	tss->buflen1 = TEXTBUFLEN;
+	tss->buf2 = palloc(TEXTBUFLEN);
+	tss->buflen2 = TEXTBUFLEN;
+
+	ssup->ssup_extra = tss;
+	ssup->comparator = bttextfastcmp_locale;
+}
+
+/*
+ * sortsupport comparison func (for C locale case)
+ */
+static int
+bttextfastcmp_c(Datum x, Datum y, SortSupport ssup)
+{
+	text	   *arg1 = DatumGetTextPP(x);
+	text	   *arg2 = DatumGetTextPP(y);
+	char	   *a1p,
+			   *a2p;
+	int			len1,
+				len2,
+				result;
+
+	a1p = VARDATA_ANY(arg1);
+	a2p = VARDATA_ANY(arg2);
+
+	len1 = VARSIZE_ANY_EXHDR(arg1);
+	len2 = VARSIZE_ANY_EXHDR(arg2);
+
+	result = memcmp(a1p, a2p, Min(len1, len2));
+	if ((result == 0) && (len1 != len2))
+		result = (len1 < len2) ? -1 : 1;
+
+	/* We can't afford to leak memory here. */
+	if (PointerGetDatum(arg1) != x)
+		pfree(arg1);
+	if (PointerGetDatum(arg2) != y)
+		pfree(arg2);
+
+	return result;
+}
+
+/*
+ * sortsupport comparison func (for locale case)
+ */
+static int
+bttextfastcmp_locale(Datum x, Datum y, SortSupport ssup)
+{
+	text			   *arg1 = DatumGetTextPP(x);
+	text			   *arg2 = DatumGetTextPP(y);
+	TextSortSupport	   *tss = (TextSortSupport *) ssup->ssup_extra;
+
+	/* working state */
+	char			   *a1p,
+					   *a2p;
+	int					len1,
+						len2,
+						result;
+
+	a1p = VARDATA_ANY(arg1);
+	a2p = VARDATA_ANY(arg2);
+
+	len1 = VARSIZE_ANY_EXHDR(arg1);
+	len2 = VARSIZE_ANY_EXHDR(arg2);
+
+	/* Fast pre-check for equality, as discussed in varstr_cmp() */
+	if (len1 == len2 && memcmp(a1p, a2p, len1) == 0)
+	{
+		result = 0;
+		goto done;
+	}
+
+	if (len1 >= tss->buflen1)
+	{
+		pfree(tss->buf1);
+		tss->buflen1 = Max(len1 + 1, Min(tss->buflen1 * 2, MaxAllocSize));
+		tss->buf1 = MemoryContextAlloc(ssup->ssup_cxt, tss->buflen1);
+	}
+	if (len2 >= tss->buflen2)
+	{
+		pfree(tss->buf2);
+		tss->buflen2 = Max(len2 + 1, Min(tss->buflen2 * 2, MaxAllocSize));
+		tss->buf2 = MemoryContextAlloc(ssup->ssup_cxt, tss->buflen2);
+	}
+
+	memcpy(tss->buf1, a1p, len1);
+	tss->buf1[len1] = '\0';
+	memcpy(tss->buf2, a2p, len2);
+	tss->buf2[len2] = '\0';
+
+#ifdef HAVE_LOCALE_T
+	if (tss->locale)
+		result = strcoll_l(tss->buf1, tss->buf2, tss->locale);
+	else
+#endif
+		result = strcoll(tss->buf1, tss->buf2);
+
+	/*
+	 * In some locales strcoll() can claim that nonidentical strings are equal.
+	 * Believing that would be bad news for a number of reasons, so we follow
+	 * Perl's lead and sort "equal" strings according to strcmp().
+	 */
+	if (result == 0)
+		result = strcmp(tss->buf1, tss->buf2);
+
+done:
+	/* We can't afford to leak memory here. */
+	if (PointerGetDatum(arg1) != x)
+		pfree(arg1);
+	if (PointerGetDatum(arg2) != y)
+		pfree(arg2);
+
+	return result;
+}
 
 Datum
 text_larger(PG_FUNCTION_ARGS)
@@ -2334,7 +2554,7 @@ textToQualifiedNameList(text *textval)
  * SplitIdentifierString --- parse a string containing identifiers
  *
  * This is the guts of textToQualifiedNameList, and is exported for use in
- * other situations such as parsing GUC variables.	In the GUC case, it's
+ * other situations such as parsing GUC variables.  In the GUC case, it's
  * important to avoid memory leaks, so the API is designed to minimize the
  * amount of stuff that needs to be allocated and freed.
  *
@@ -2342,7 +2562,7 @@ textToQualifiedNameList(text *textval)
  *	rawstring: the input string; must be overwritable!	On return, it's
  *			   been modified to contain the separated identifiers.
  *	separator: the separator punctuation expected between identifiers
- *			   (typically '.' or ',').	Whitespace may also appear around
+ *			   (typically '.' or ',').  Whitespace may also appear around
  *			   identifiers.
  * Outputs:
  *	namelist: filled with a palloc'd list of pointers to identifiers within
@@ -2411,7 +2631,7 @@ SplitIdentifierString(char *rawstring, char separator,
 			 *
 			 * XXX because we want to overwrite the input in-place, we cannot
 			 * support a downcasing transformation that increases the string
-			 * length.	This is not a problem given the current implementation
+			 * length.  This is not a problem given the current implementation
 			 * of downcase_truncate_identifier, but we'll probably have to do
 			 * something about this someday.
 			 */
@@ -2468,7 +2688,7 @@ SplitIdentifierString(char *rawstring, char separator,
  * Inputs:
  *	rawstring: the input string; must be modifiable!
  *	separator: the separator punctuation expected between directories
- *			   (typically ',' or ';').	Whitespace may also appear around
+ *			   (typically ',' or ';').  Whitespace may also appear around
  *			   directories.
  * Outputs:
  *	namelist: filled with a palloc'd list of directory names.
@@ -2875,7 +3095,7 @@ check_replace_text_has_escape_char(const text *replace_text)
  * appendStringInfoRegexpSubstr
  *
  * Append replace_text to str, substituting regexp back references for
- * \n escapes.	start_ptr is the start of the match in the source string,
+ * \n escapes.  start_ptr is the start of the match in the source string,
  * at logical character position data_pos.
  */
 static void
@@ -2958,7 +3178,7 @@ appendStringInfoRegexpSubstr(StringInfo str, text *replace_text,
 		if (so != -1 && eo != -1)
 		{
 			/*
-			 * Copy the text that is back reference of regexp.	Note so and eo
+			 * Copy the text that is back reference of regexp.  Note so and eo
 			 * are counted in characters not bytes.
 			 */
 			char	   *chunk_start;
@@ -3035,6 +3255,7 @@ replace_text_regexp(text *src_text, void *regexp,
 		{
 			char		errMsg[100];
 
+			CHECK_FOR_INTERRUPTS();
 			pg_regerror(regexec_result, re, errMsg, sizeof(errMsg));
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_REGULAR_EXPRESSION),
@@ -3833,16 +4054,15 @@ concat_internal(const char *sepstr, int argidx,
 			return NULL;
 
 		/*
-		 * Non-null argument had better be an array
-		 *
-		 * Correct values are ensured by parser check, but this function
-		 * can be called directly, bypassing the parser, so we should do
-		 * some minimal check too - this form of call requires correctly set
-		 * expr argtype in flinfo.
+		 * Non-null argument had better be an array.  We assume that any call
+		 * context that could let get_fn_expr_variadic return true will have
+		 * checked that a VARIADIC-labeled parameter actually is an array.  So
+		 * it should be okay to just Assert that it's an array rather than
+		 * doing a full-fledged error check.
 		 */
-		Assert(OidIsValid(get_fn_expr_argtype(fcinfo->flinfo, argidx)));
-		Assert(OidIsValid(get_element_type(get_fn_expr_argtype(fcinfo->flinfo, argidx))));
+		Assert(OidIsValid(get_base_element_type(get_fn_expr_argtype(fcinfo->flinfo, argidx))));
 
+		/* OK, safe to fetch the array value */
 		arr = PG_GETARG_ARRAYTYPE_P(argidx);
 
 		/*
@@ -4062,16 +4282,15 @@ text_format(PG_FUNCTION_ARGS)
 		else
 		{
 			/*
-			 * Non-null argument had better be an array
-			 *
-			 * Correct values are ensured by parser check, but this function
-			 * can be called directly, bypassing the parser, so we should do
-			 * some minimal check too - this form of call requires correctly set
-			 * expr argtype in flinfo.
+			 * Non-null argument had better be an array.  We assume that any
+			 * call context that could let get_fn_expr_variadic return true
+			 * will have checked that a VARIADIC-labeled parameter actually is
+			 * an array.  So it should be okay to just Assert that it's an
+			 * array rather than doing a full-fledged error check.
 			 */
-			Assert(OidIsValid(get_fn_expr_argtype(fcinfo->flinfo, 1)));
-			Assert(OidIsValid(get_element_type(get_fn_expr_argtype(fcinfo->flinfo, 1))));
+			Assert(OidIsValid(get_base_element_type(get_fn_expr_argtype(fcinfo->flinfo, 1))));
 
+			/* OK, safe to fetch the array value */
 			arr = PG_GETARG_ARRAYTYPE_P(1);
 
 			/* Get info about array element type */
@@ -4238,7 +4457,7 @@ text_format(PG_FUNCTION_ARGS)
 
 		/*
 		 * Get the appropriate typOutput function, reusing previous one if
-		 * same type as previous argument.	That's particularly useful in the
+		 * same type as previous argument.  That's particularly useful in the
 		 * variadic-array case, but often saves work even for ordinary calls.
 		 */
 		if (typid != prev_type)
@@ -4330,12 +4549,12 @@ text_format_parse_digits(const char **ptr, const char *end_ptr, int *value)
  *
  * Inputs are start_ptr (the position after '%') and end_ptr (string end + 1).
  * Output parameters:
- *	argpos: argument position for value to be printed.	-1 means unspecified.
- *	widthpos: argument position for width.	Zero means the argument position
+ *	argpos: argument position for value to be printed.  -1 means unspecified.
+ *	widthpos: argument position for width.  Zero means the argument position
  *			was unspecified (ie, take the next arg) and -1 means no width
  *			argument (width was omitted or specified as a constant).
  *	flags: bitmask of flags.
- *	width: directly-specified width value.	Zero means the width was omitted
+ *	width: directly-specified width value.  Zero means the width was omitted
  *			(note it's not necessary to distinguish this case from an explicit
  *			zero width value).
  *

@@ -21,7 +21,8 @@
 extern void RemoveObjects(DropStmt *stmt);
 
 /* commands/indexcmds.c */
-extern Oid DefineIndex(IndexStmt *stmt,
+extern Oid DefineIndex(Oid relationId,
+			IndexStmt *stmt,
 			Oid indexRelationId,
 			bool is_alter_table,
 			bool check_rights,
@@ -36,7 +37,6 @@ extern char *makeObjectName(const char *name1, const char *name2,
 extern char *ChooseRelationName(const char *name1, const char *name2,
 				   const char *label, Oid namespaceid);
 extern bool CheckIndexCompatible(Oid oldId,
-					 RangeVar *heapRelation,
 					 char *accessMethodName,
 					 List *attributeList,
 					 List *exclusionOpNames);
@@ -124,6 +124,7 @@ extern Oid	AlterUserMapping(AlterUserMappingStmt *stmt);
 extern Oid	RemoveUserMapping(DropUserMappingStmt *stmt);
 extern void RemoveUserMappingById(Oid umId);
 extern void CreateForeignTable(CreateForeignTableStmt *stmt, Oid relid);
+extern void ImportForeignSchema(ImportForeignSchemaStmt *stmt);
 extern Datum transformGenericOptions(Oid catalogId,
 						Datum oldOptions,
 						List *options,

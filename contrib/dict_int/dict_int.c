@@ -17,7 +17,6 @@
 
 PG_MODULE_MAGIC;
 
-
 typedef struct
 {
 	int			maxlen;
@@ -26,10 +25,7 @@ typedef struct
 
 
 PG_FUNCTION_INFO_V1(dintdict_init);
-Datum		dintdict_init(PG_FUNCTION_ARGS);
-
 PG_FUNCTION_INFO_V1(dintdict_lexize);
-Datum		dintdict_lexize(PG_FUNCTION_ARGS);
 
 Datum
 dintdict_init(PG_FUNCTION_ARGS)

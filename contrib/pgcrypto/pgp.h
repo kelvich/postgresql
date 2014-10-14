@@ -17,7 +17,7 @@
  * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
  * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
  * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.	IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
  * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
  * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
  * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
@@ -28,6 +28,8 @@
  *
  * contrib/pgcrypto/pgp.h
  */
+
+#include "lib/stringinfo.h"
 
 #include "mbuf.h"
 #include "px.h"
@@ -274,10 +276,11 @@ void		pgp_cfb_free(PGP_CFB *ctx);
 int			pgp_cfb_encrypt(PGP_CFB *ctx, const uint8 *data, int len, uint8 *dst);
 int			pgp_cfb_decrypt(PGP_CFB *ctx, const uint8 *data, int len, uint8 *dst);
 
-int			pgp_armor_encode(const uint8 *src, unsigned len, uint8 *dst);
-int			pgp_armor_decode(const uint8 *src, unsigned len, uint8 *dst);
-unsigned	pgp_armor_enc_len(unsigned len);
-unsigned	pgp_armor_dec_len(unsigned len);
+void		pgp_armor_encode(const uint8 *src, unsigned len, StringInfo dst,
+							 int num_headers, char **keys, char **values);
+int			pgp_armor_decode(const uint8 *src, int len, StringInfo dst);
+int			pgp_extract_armor_headers(const uint8 *src, unsigned len,
+									  int *nheaders, char ***keys, char ***values);
 
 int			pgp_compress_filter(PushFilter **res, PGP_Context *ctx, PushFilter *dst);
 int			pgp_decompress_filter(PullFilter **res, PGP_Context *ctx, PullFilter *src);

@@ -106,6 +106,7 @@ static	void			 check_labels(const char *start_label,
 static	PLpgSQL_expr	*read_cursor_args(PLpgSQL_var *cursor,
 										  int until, const char *expected);
 static	List			*read_raise_options(void);
+static	void			check_raise_parameters(PLpgSQL_stmt_raise *stmt);
 
 %}
 
@@ -727,6 +728,21 @@ decl_varname	: T_WORD
 											  $1.ident, NULL, NULL,
 											  NULL) != NULL)
 							yyerror("duplicate declaration");
+
+						if (plpgsql_curr_compile->extra_warnings & PLPGSQL_XCHECK_SHADOWVAR ||
+							plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR)
+						{
+							PLpgSQL_nsitem *nsi;
+							nsi = plpgsql_ns_lookup(plpgsql_ns_top(), false,
+													$1.ident, NULL, NULL, NULL);
+							if (nsi != NULL)
+								ereport(plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR ? ERROR : WARNING,
+										(errcode(ERRCODE_DUPLICATE_ALIAS),
+										 errmsg("variable \"%s\" shadows a previously defined variable",
+												$1.ident),
+										 parser_errposition(@1)));
+						}
+
 					}
 				| unreserved_keyword
 					{
@@ -740,6 +756,21 @@ decl_varname	: T_WORD
 											  $1, NULL, NULL,
 											  NULL) != NULL)
 							yyerror("duplicate declaration");
+
+						if (plpgsql_curr_compile->extra_warnings & PLPGSQL_XCHECK_SHADOWVAR ||
+							plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR)
+						{
+							PLpgSQL_nsitem *nsi;
+							nsi = plpgsql_ns_lookup(plpgsql_ns_top(), false,
+													$1, NULL, NULL, NULL);
+							if (nsi != NULL)
+								ereport(plpgsql_curr_compile->extra_errors & PLPGSQL_XCHECK_SHADOWVAR ? ERROR : WARNING,
+										(errcode(ERRCODE_DUPLICATE_ALIAS),
+										 errmsg("variable \"%s\" shadows a previously defined variable",
+												$1),
+										 parser_errposition(@1)));
+						}
+
 					}
 				;
 
@@ -1818,6 +1849,8 @@ stmt_raise		: K_RAISE
 							if (tok == K_USING)
 								new->options = read_raise_options();
 						}
+
+						check_raise_parameters(new);
 
 						$$ = (PLpgSQL_stmt *)new;
 					}
@@ -3462,7 +3495,7 @@ parse_datatype(const char *string, int location)
 	error_context_stack = &syntax_errcontext;
 
 	/* Let the main parser try to parse it under standard SQL rules */
-	parseTypeString(string, &type_id, &typmod);
+	parseTypeString(string, &type_id, &typmod, false);
 
 	/* Restore former ereport callback */
 	error_context_stack = syntax_errcontext.previous;
@@ -3735,6 +3768,41 @@ read_raise_options(void)
 	}
 
 	return result;
+}
+
+/*
+ * Check that the number of parameter placeholders in the message matches the
+ * number of parameters passed to it, if a message was given.
+ */
+static void
+check_raise_parameters(PLpgSQL_stmt_raise *stmt)
+{
+	char	   *cp;
+	int			expected_nparams = 0;
+
+	if (stmt->message == NULL)
+		return;
+
+	for (cp = stmt->message; *cp; cp++)
+	{
+		if (cp[0] == '%')
+		{
+			/* ignore literal % characters */
+			if (cp[1] == '%')
+				cp++;
+			else
+				expected_nparams++;
+		}
+	}
+
+	if (expected_nparams < list_length(stmt->params))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("too many parameters specified for RAISE")));
+	if (expected_nparams > list_length(stmt->params))
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("too few parameters specified for RAISE")));
 }
 
 /*

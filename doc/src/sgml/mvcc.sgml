@@ -865,7 +865,9 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         <para>
          Acquired by <command>VACUUM</command> (without <option>FULL</option>),
          <command>ANALYZE</>, <command>CREATE INDEX CONCURRENTLY</>, and
-         some forms of <command>ALTER TABLE</command>.
+         <command>ALTER TABLE VALIDATE</command> and other
+         <command>ALTER TABLE</command> variants (for full details see
+         <xref linkend="SQL-ALTERTABLE">).
         </para>
        </listitem>
       </varlistentry>
@@ -951,10 +953,11 @@ ERROR:  could not serialize access due to read/write dependencies among transact
         </para>
 
         <para>
-         Acquired by the <command>ALTER TABLE</>, <command>DROP TABLE</>,
+         Acquired by the <command>DROP TABLE</>,
          <command>TRUNCATE</command>, <command>REINDEX</command>,
          <command>CLUSTER</command>, and <command>VACUUM FULL</command>
-         commands.
+         commands. Many forms of <command>ALTER TABLE</> also acquire
+         a lock at this level (see <xref linkend="SQL-ALTERTABLE">).
          This is also the default lock mode for <command>LOCK TABLE</command>
          statements that do not specify a mode explicitly.
         </para>
@@ -1136,7 +1139,11 @@ ERROR:  could not serialize access due to read/write dependencies among transact
      UPDATE</command> modifies selected rows to mark them locked, and so
      will result in disk writes.
     </para>
+   </sect2>
 
+   <sect2 id="locking-pages">
+    <title>Page-level Locks</title>
+  
     <para>
      In addition to table and row locks, page-level share/exclusive locks are
      used to control read/write access to table pages in the shared buffer
@@ -1251,7 +1258,7 @@ UPDATE accounts SET balance = balance - 100.00 WHERE acctnum = 22222;
      correctly.  Advisory locks can be useful for locking strategies
      that are an awkward fit for the MVCC model.
      For example, a common use of advisory locks is to emulate pessimistic
-     locking strategies typical of so called <quote>flat file</> data
+     locking strategies typical of so-called <quote>flat file</> data
      management systems.
      While a flag stored in a table could be used for the same purpose,
      advisory locks are faster, avoid table bloat, and are automatically

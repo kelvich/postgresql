@@ -19,6 +19,7 @@ CREATE VIEW pg_roles AS
         rolconnlimit,
         '********'::text as rolpassword,
         rolvaliduntil,
+        rolbypassrls,
         setconfig as rolconfig,
         pg_authid.oid
     FROM pg_authid LEFT JOIN pg_db_role_setting s
@@ -62,6 +63,36 @@ CREATE VIEW pg_user AS
         useconfig
     FROM pg_shadow;
 
+CREATE VIEW pg_policies AS
+    SELECT
+        N.nspname AS schemaname,
+        C.relname AS tablename,
+        rs.rsecpolname AS policyname,
+        CASE
+            WHEN rs.rsecroles = '{0}' THEN
+                string_to_array('public', '')
+            ELSE
+                ARRAY
+                (
+                    SELECT rolname
+                    FROM pg_catalog.pg_authid
+                    WHERE oid = ANY (rs.rsecroles) ORDER BY 1
+                )
+        END AS roles,
+        CASE WHEN rs.rseccmd IS NULL THEN 'ALL' ELSE
+            CASE rs.rseccmd
+                WHEN 'r' THEN 'SELECT'
+                WHEN 'a' THEN 'INSERT'
+                WHEN 'u' THEN 'UPDATE'
+                WHEN 'd' THEN 'DELETE'
+            END
+        END AS cmd,
+        pg_catalog.pg_get_expr(rs.rsecqual, rs.rsecrelid) AS qual,
+        pg_catalog.pg_get_expr(rs.rsecwithcheck, rs.rsecrelid) AS with_check
+    FROM pg_catalog.pg_rowsecurity rs
+    JOIN pg_catalog.pg_class C ON (C.oid = rs.rsecrelid)
+    LEFT JOIN pg_catalog.pg_namespace N ON (N.oid = C.relnamespace);
+
 CREATE VIEW pg_rules AS
     SELECT
         N.nspname AS schemaname,
@@ -89,7 +120,8 @@ CREATE VIEW pg_tables AS
         T.spcname AS tablespace,
         C.relhasindex AS hasindexes,
         C.relhasrules AS hasrules,
-        C.relhastriggers AS hastriggers
+        C.relhastriggers AS hastriggers,
+        C.relrowsecurity AS rowsecurity
     FROM pg_class C LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
          LEFT JOIN pg_tablespace T ON (T.oid = C.reltablespace)
     WHERE C.relkind = 'r';
@@ -586,6 +618,8 @@ CREATE VIEW pg_stat_activity AS
             S.state_change,
             S.waiting,
             S.state,
+            S.backend_xid,
+            s.backend_xmin,
             S.query
     FROM pg_database D, pg_stat_get_activity(NULL) AS S, pg_authid U
     WHERE S.datid = D.oid AND
@@ -601,6 +635,7 @@ CREATE VIEW pg_stat_replication AS
             S.client_hostname,
             S.client_port,
             S.backend_start,
+            S.backend_xmin,
             W.state,
             W.sent_location,
             W.write_location,
@@ -616,11 +651,13 @@ CREATE VIEW pg_stat_replication AS
 CREATE VIEW pg_replication_slots AS
     SELECT
             L.slot_name,
+            L.plugin,
             L.slot_type,
             L.datoid,
             D.datname AS database,
             L.active,
             L.xmin,
+            L.catalog_xmin,
             L.restart_lsn
     FROM pg_get_replication_slots() AS L
             LEFT JOIN pg_database D ON (L.datoid = D.oid);
@@ -810,12 +847,55 @@ COMMENT ON FUNCTION ts_debug(text) IS
 
 CREATE OR REPLACE FUNCTION
   pg_start_backup(label text, fast boolean DEFAULT false)
-  RETURNS text STRICT VOLATILE LANGUAGE internal AS 'pg_start_backup';
+  RETURNS pg_lsn STRICT VOLATILE LANGUAGE internal AS 'pg_start_backup';
 
+-- legacy definition for compatibility with 9.3
 CREATE OR REPLACE FUNCTION
   json_populate_record(base anyelement, from_json json, use_json_as_text boolean DEFAULT false)
   RETURNS anyelement LANGUAGE internal STABLE AS 'json_populate_record';
 
+-- legacy definition for compatibility with 9.3
 CREATE OR REPLACE FUNCTION
   json_populate_recordset(base anyelement, from_json json, use_json_as_text boolean DEFAULT false)
   RETURNS SETOF anyelement LANGUAGE internal STABLE ROWS 100  AS 'json_populate_recordset';
+
+CREATE OR REPLACE FUNCTION pg_logical_slot_get_changes(
+    IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
+    OUT location pg_lsn, OUT xid xid, OUT data text)
+RETURNS SETOF RECORD
+LANGUAGE INTERNAL
+VOLATILE ROWS 1000 COST 1000
+AS 'pg_logical_slot_get_changes';
+
+CREATE OR REPLACE FUNCTION pg_logical_slot_peek_changes(
+    IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
+    OUT location pg_lsn, OUT xid xid, OUT data text)
+RETURNS SETOF RECORD
+LANGUAGE INTERNAL
+VOLATILE ROWS 1000 COST 1000
+AS 'pg_logical_slot_peek_changes';
+
+CREATE OR REPLACE FUNCTION pg_logical_slot_get_binary_changes(
+    IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
+    OUT location pg_lsn, OUT xid xid, OUT data bytea)
+RETURNS SETOF RECORD
+LANGUAGE INTERNAL
+VOLATILE ROWS 1000 COST 1000
+AS 'pg_logical_slot_get_binary_changes';
+
+CREATE OR REPLACE FUNCTION pg_logical_slot_peek_binary_changes(
+    IN slot_name name, IN upto_lsn pg_lsn, IN upto_nchanges int, VARIADIC options text[] DEFAULT '{}',
+    OUT location pg_lsn, OUT xid xid, OUT data bytea)
+RETURNS SETOF RECORD
+LANGUAGE INTERNAL
+VOLATILE ROWS 1000 COST 1000
+AS 'pg_logical_slot_peek_binary_changes';
+
+CREATE OR REPLACE FUNCTION
+  make_interval(years int4 DEFAULT 0, months int4 DEFAULT 0, weeks int4 DEFAULT 0,
+                days int4 DEFAULT 0, hours int4 DEFAULT 0, mins int4 DEFAULT 0,
+                secs double precision DEFAULT 0.0)
+RETURNS interval
+LANGUAGE INTERNAL
+STRICT IMMUTABLE
+AS 'make_interval';

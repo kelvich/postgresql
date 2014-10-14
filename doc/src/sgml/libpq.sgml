@@ -131,15 +131,15 @@ PGconn *PQconnectdbParams(const char * const *keywords,
       <para>
        The passed arrays can be empty to use all default parameters, or can
        contain one or more parameter settings. They should be matched in length.
-       Processing will stop with the last non-<symbol>NULL</symbol> element
-       of the <literal>keywords</literal> array.
+       Processing will stop at the first <symbol>NULL</symbol> element
+       in the <literal>keywords</literal> array.
       </para>
 
       <para>
-       If  any  parameter is unspecified, then the corresponding
-       environment variable (see <xref linkend="libpq-envars">)
-       is checked. If the  environment  variable is not set either,
-       then the indicated built-in defaults are used.
+       If  any  parameter is <symbol>NULL</symbol> or an emptry string, the corresponding
+       environment variable (see <xref linkend="libpq-envars">) is checked.
+       If the  environment  variable is not set either, then the indicated
+       built-in defaults are used.
       </para>
 
       <para>
@@ -1611,15 +1611,6 @@ PGTransactionStatusType PQtransactionStatus(const PGconn *conn);
        <literal>PQTRANS_ACTIVE</literal> is reported only when a query
        has been sent to the server and not yet completed.
       </para>
-
-      <caution>
-       <para>
-        <function>PQtransactionStatus</> will give incorrect results when using
-        a <productname>PostgreSQL</> 7.3 server that has the parameter <literal>autocommit</>
-        set to off.  The server-side autocommit feature has been
-        deprecated and does not exist in later server versions.
-       </para>
-      </caution>
      </listitem>
     </varlistentry>
 
@@ -2618,11 +2609,13 @@ char *PQresultErrorField(const PGresult *res, int fieldcode);
          </varlistentry>
 
          <varlistentry id="libpq-pg-diag-sqlstate">
-          <term><symbol>PG_DIAG_SQLSTATE</></term>
+          <term>
+           <symbol>PG_DIAG_SQLSTATE</>
           <indexterm>
            <primary>error codes</primary>
            <secondary>libpq</secondary>
           </indexterm>
+          </term>
           <listitem>
            <para>
             The SQLSTATE code for the error. The SQLSTATE code identifies
@@ -5386,7 +5379,8 @@ int PQclientEncoding(const PGconn *<replaceable>conn</replaceable>);
 </synopsis>
 
       Note that it returns the encoding ID, not a symbolic string
-      such as <literal>EUC_JP</literal>. To convert an encoding ID to an encoding name, you
+      such as <literal>EUC_JP</literal>. If unsuccessful, it returns -1.
+      To convert an encoding ID to an encoding name, you
       can use:
 
 <synopsis>
@@ -6884,7 +6878,7 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
        <primary><envar>PGLOCALEDIR</envar></primary>
       </indexterm>
       <envar>PGLOCALEDIR</envar> sets the directory containing the
-      <literal>locale</> files for message internationalization.
+      <literal>locale</> files for message localization.
      </para>
     </listitem>
    </itemizedlist>
@@ -7049,17 +7043,17 @@ version:1
 dn:cn=mydatabase,dc=mycompany,dc=com
 changetype:add
 objectclass:top
-objectclass:groupOfUniqueNames
+objectclass:device
 cn:mydatabase
-uniqueMember:host=dbserver.mycompany.com
-uniqueMember:port=5439
-uniqueMember:dbname=mydb
-uniqueMember:user=mydb_user
-uniqueMember:sslmode=require
+description:host=dbserver.mycompany.com
+description:port=5439
+description:dbname=mydb
+description:user=mydb_user
+description:sslmode=require
 </programlisting>
    might be queried with the following LDAP URL:
 <programlisting>
-ldap://ldap.mycompany.com/dc=mycompany,dc=com?uniqueMember?one?(cn=mydatabase)
+ldap://ldap.mycompany.com/dc=mycompany,dc=com?description?one?(cn=mydatabase)
 </programlisting>
   </para>
 
@@ -7164,7 +7158,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
     For backwards compatibility with earlier versions of PostgreSQL, if a
     root CA file exists, the behavior of
     <literal>sslmode</literal>=<literal>require</literal> will be the same
-    as that of <literal>verify-ca</literal>, meaning the sever certificate
+    as that of <literal>verify-ca</literal>, meaning the server certificate
     is validated against the CA. Relying on this behavior is discouraged,
     and applications that need certificate validation should always use
     <literal>verify-ca</literal> or <literal>verify-full</literal>.
@@ -7206,7 +7200,7 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
   </para>
 
   <para>
-   Note that the client's <filename>~/.postgresql/root.crt</> lists the top-level CAs 
+   Note that the client's <filename>~/.postgresql/root.crt</> lists the top-level CAs
    that are considered trusted for signing server certificates.  In principle it need
    not list the CA that signed the client's certificate, though in most cases
    that CA would also be trusted for server certificates.

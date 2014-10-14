@@ -51,7 +51,7 @@
     Sometimes it is desirable to write Tcl functions that are not restricted
     to safe Tcl.  For example, one might want a Tcl function that sends
     email.  To handle these cases, there is a variant of <application>PL/Tcl</> called <literal>PL/TclU</>
-    (for untrusted Tcl).  This is the exact same language except that a full
+    (for untrusted Tcl).  This is exactly the same language except that a full
     Tcl interpreter is used.  <emphasis>If <application>PL/TclU</> is used, it must be
     installed as an untrusted procedural language</emphasis> so that only
     database superusers can create functions in it.  The writer of a <application>PL/TclU</>
@@ -418,10 +418,13 @@ $$ LANGUAGE pltcl;
      </varlistentry>
 
      <varlistentry>
-      <indexterm>
-       <primary>spi_lastoid</primary>
-      </indexterm>
-      <term><function>spi_lastoid</></term>
+      <term>
+       <function>spi_lastoid</>
+       <indexterm>
+        <primary>spi_lastoid</primary>
+        <secondary>in PL/Tcl</secondary>
+       </indexterm>
+      </term>
       <listitem>
        <para>
         Returns the OID of the row inserted by the last
@@ -478,11 +481,13 @@ SELECT 'doesn''t' AS ret
      </varlistentry>
 
      <varlistentry>
-      <indexterm>
-       <primary>elog</primary>
-       <secondary>in PL/Tcl</secondary>
-      </indexterm>
-      <term><function>elog</> <replaceable>level</replaceable> <replaceable>msg</replaceable></term>
+      <term>
+       <function>elog</> <replaceable>level</replaceable> <replaceable>msg</replaceable>
+       <indexterm>
+        <primary>elog</primary>
+        <secondary>in PL/Tcl</secondary>
+       </indexterm>
+      </term>
       <listitem>
        <para>
         Emits a log or error message. Possible levels are

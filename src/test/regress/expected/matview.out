@@ -247,7 +247,7 @@ SELECT * FROM tvvm;
 REFRESH MATERIALIZED VIEW tmm;
 REFRESH MATERIALIZED VIEW CONCURRENTLY tvmm;
 ERROR:  cannot refresh materialized view "public.tvmm" concurrently
-HINT:  Create a UNIQUE index with no WHERE clause on one or more columns of the materialized view.
+HINT:  Create a unique index with no WHERE clause on one or more columns of the materialized view.
 REFRESH MATERIALIZED VIEW tvmm;
 REFRESH MATERIALIZED VIEW tvvm;
 EXPLAIN (costs off)
@@ -346,13 +346,13 @@ CREATE VIEW v_test2 AS SELECT moo, 2*moo FROM v_test1 UNION ALL SELECT moo, 3*mo
  moo      | integer |           | plain   | 
  ?column? | integer |           | plain   | 
 View definition:
-         SELECT v_test1.moo,
-            2 * v_test1.moo
-           FROM v_test1
+ SELECT v_test1.moo,
+    2 * v_test1.moo
+   FROM v_test1
 UNION ALL
-         SELECT v_test1.moo,
-            3 * v_test1.moo
-           FROM v_test1;
+ SELECT v_test1.moo,
+    3 * v_test1.moo
+   FROM v_test1;
 
 CREATE MATERIALIZED VIEW mv_test2 AS SELECT moo, 2*moo FROM v_test2 UNION ALL SELECT moo, 3*moo FROM v_test2;
 \d+ mv_test2
@@ -362,13 +362,13 @@ CREATE MATERIALIZED VIEW mv_test2 AS SELECT moo, 2*moo FROM v_test2 UNION ALL SE
  moo      | integer |           | plain   |              | 
  ?column? | integer |           | plain   |              | 
 View definition:
-         SELECT v_test2.moo,
-            2 * v_test2.moo
-           FROM v_test2
+ SELECT v_test2.moo,
+    2 * v_test2.moo
+   FROM v_test2
 UNION ALL
-         SELECT v_test2.moo,
-            3 * v_test2.moo
-           FROM v_test2;
+ SELECT v_test2.moo,
+    3 * v_test2.moo
+   FROM v_test2;
 
 CREATE MATERIALIZED VIEW mv_test3 AS SELECT * FROM mv_test2 WHERE moo = 12345;
 SELECT relispopulated FROM pg_class WHERE oid = 'mv_test3'::regclass;
@@ -411,7 +411,7 @@ REFRESH MATERIALIZED VIEW mv;
 ERROR:  could not create unique index "mv_a_idx"
 DETAIL:  Key (a)=(1) is duplicated.
 REFRESH MATERIALIZED VIEW CONCURRENTLY mv;
-ERROR:  new data for "mv" contains duplicate rows without any NULL columns
+ERROR:  new data for "mv" contains duplicate rows without any null columns
 DETAIL:  Row: (1,10)
 DROP TABLE foo CASCADE;
 NOTICE:  drop cascades to materialized view mv
@@ -476,3 +476,41 @@ SELECT * FROM mv_v;
 
 DROP TABLE v CASCADE;
 NOTICE:  drop cascades to materialized view mv_v
+-- make sure that matview rows can be referenced as source rows (bug #9398)
+CREATE TABLE v AS SELECT generate_series(1,10) AS a;
+CREATE MATERIALIZED VIEW mv_v AS SELECT a FROM v WHERE a <= 5;
+DELETE FROM v WHERE EXISTS ( SELECT * FROM mv_v WHERE mv_v.a = v.a );
+SELECT * FROM v;
+ a  
+----
+  6
+  7
+  8
+  9
+ 10
+(5 rows)
+
+SELECT * FROM mv_v;
+ a 
+---
+ 1
+ 2
+ 3
+ 4
+ 5
+(5 rows)
+
+DROP TABLE v CASCADE;
+NOTICE:  drop cascades to materialized view mv_v
+-- make sure running as superuser works when MV owned by another role (bug #11208)
+CREATE ROLE user_dw;
+SET ROLE user_dw;
+CREATE TABLE foo_data AS SELECT i, md5(random()::text)
+  FROM generate_series(1, 10) i;
+CREATE MATERIALIZED VIEW mv_foo AS SELECT * FROM foo_data;
+CREATE UNIQUE INDEX ON mv_foo (i);
+RESET ROLE;
+REFRESH MATERIALIZED VIEW mv_foo;
+REFRESH MATERIALIZED VIEW CONCURRENTLY mv_foo;
+DROP OWNED BY user_dw CASCADE;
+DROP ROLE user_dw;

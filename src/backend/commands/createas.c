@@ -36,6 +36,7 @@
 #include "miscadmin.h"
 #include "parser/parse_clause.h"
 #include "rewrite/rewriteHandler.h"
+#include "rewrite/rowsecurity.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -55,6 +56,9 @@ typedef struct
 	BulkInsertState bistate;	/* bulk insert state */
 } DR_intorel;
 
+/* the OID of the created table, for ExecCreateTableAs consumption */
+static Oid	CreateAsRelid = InvalidOid;
+
 static void intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo);
 static void intorel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void intorel_shutdown(DestReceiver *self);
@@ -64,7 +68,7 @@ static void intorel_destroy(DestReceiver *self);
 /*
  * ExecCreateTableAs -- execute a CREATE TABLE AS command
  */
-void
+Oid
 ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 				  ParamListInfo params, char *completionTag)
 {
@@ -75,6 +79,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	Oid			save_userid = InvalidOid;
 	int			save_sec_context = 0;
 	int			save_nestlevel = 0;
+	Oid			relOid;
 	List	   *rewritten;
 	PlannedStmt *plan;
 	QueryDesc  *queryDesc;
@@ -98,13 +103,15 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		Assert(!is_matview);	/* excluded by syntax */
 		ExecuteQuery(estmt, into, queryString, params, dest, completionTag);
 
-		return;
+		relOid = CreateAsRelid;
+		CreateAsRelid = InvalidOid;
+		return relOid;
 	}
 	Assert(query->commandType == CMD_SELECT);
 
 	/*
 	 * For materialized views, lock down security-restricted operations and
-	 * arrange to make GUC variable changes local to this command.	This is
+	 * arrange to make GUC variable changes local to this command.  This is
 	 * not necessary for security, but this keeps the behavior similar to
 	 * REFRESH MATERIALIZED VIEW.  Otherwise, one could create a materialized
 	 * view not possible to refresh.
@@ -124,9 +131,9 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 	 * plancache.c.
 	 *
 	 * Because the rewriter and planner tend to scribble on the input, we make
-	 * a preliminary copy of the source querytree.	This prevents problems in
+	 * a preliminary copy of the source querytree.  This prevents problems in
 	 * the case that CTAS is in a portal or plpgsql function and is executed
-	 * repeatedly.	(See also the same hack in EXPLAIN and PREPARE.)
+	 * repeatedly.  (See also the same hack in EXPLAIN and PREPARE.)
 	 */
 	rewritten = QueryRewrite((Query *) copyObject(query));
 
@@ -141,7 +148,7 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 
 	/*
 	 * Use a snapshot with an updated command ID to ensure this query sees
-	 * results of any previously executed queries.	(This could only matter if
+	 * results of any previously executed queries.  (This could only matter if
 	 * the planner executed an allegedly-stable function that changed the
 	 * database contents, but let's do it anyway to be parallel to the EXPLAIN
 	 * code path.)
@@ -190,6 +197,11 @@ ExecCreateTableAs(CreateTableAsStmt *stmt, const char *queryString,
 		/* Restore userid and security context */
 		SetUserIdAndSecContext(save_userid, save_sec_context);
 	}
+
+	relOid = CreateAsRelid;
+	CreateAsRelid = InvalidOid;
+
+	return relOid;
 }
 
 /*
@@ -359,8 +371,8 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 
 	/*
 	 * If necessary, create a TOAST table for the target table.  Note that
-	 * AlterTableCreateToastTable ends with CommandCounterIncrement(), so that
-	 * the TOAST table will be visible for insertion.
+	 * NewRelationCreateToastTable ends with CommandCounterIncrement(), so
+	 * that the TOAST table will be visible for insertion.
 	 */
 	CommandCounterIncrement();
 
@@ -373,7 +385,7 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 
 	(void) heap_reloptions(RELKIND_TOASTVALUE, toast_options, true);
 
-	AlterTableCreateToastTable(intoRelationId, toast_options);
+	NewRelationCreateToastTable(intoRelationId, toast_options);
 
 	/* Create the "view" part of a materialized view. */
 	if (is_matview)
@@ -409,6 +421,19 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	ExecCheckRTPerms(list_make1(rte), true);
 
 	/*
+	 * Make sure the constructed table does not have RLS enabled.
+	 *
+	 * check_enable_rls() will ereport(ERROR) itself if the user has requested
+	 * something invalid, and otherwise will return RLS_ENABLED if RLS should
+	 * be enabled here.  We don't actually support that currently, so throw
+	 * our own ereport(ERROR) if that happens.
+	 */
+	if (check_enable_rls(intoRelationId, InvalidOid) == RLS_ENABLED)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 (errmsg("policies not yet implemented for this command"))));
+
+	/*
 	 * Tentatively mark the target as populated, if it's a matview and we're
 	 * going to fill it; otherwise, no change needed.
 	 */
@@ -420,6 +445,9 @@ intorel_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 	 */
 	myState->rel = intoRelationDesc;
 	myState->output_cid = GetCurrentCommandId(true);
+
+	/* and remember the new relation's OID for ExecCreateTableAs */
+	CreateAsRelid = RelationGetRelid(myState->rel);
 
 	/*
 	 * We can skip WAL-logging the insertions, unless PITR or streaming

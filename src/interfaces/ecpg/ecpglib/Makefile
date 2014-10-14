@@ -13,12 +13,13 @@ subdir = src/interfaces/ecpg/ecpglib
 top_builddir = ../../../..
 include $(top_builddir)/src/Makefile.global
 
+PGFILEDESC = "ECPG - embedded SQL in C"
 NAME= ecpg
 SO_MAJOR_VERSION= 6
-SO_MINOR_VERSION= 6
+SO_MINOR_VERSION= 7
 
 override CPPFLAGS := -I../include -I$(top_srcdir)/src/interfaces/ecpg/include \
-	-I$(libpq_srcdir) -I$(top_builddir)/src/port $(CPPFLAGS)
+	-I$(libpq_srcdir) -I$(top_builddir)/src/port -DFRONTEND $(CPPFLAGS)
 override CFLAGS += $(PTHREAD_CFLAGS)
 
 # Need to recompile any libpgport object files
@@ -26,7 +27,7 @@ LIBS := $(filter-out -lpgport, $(LIBS))
 
 OBJS= execute.o typename.o descriptor.o sqlda.o data.o error.o prepare.o memory.o \
 	connect.o misc.o path.o pgstrcasecmp.o \
-	$(filter snprintf.o strlcpy.o win32setlocale.o isinf.o, $(LIBOBJS))
+	$(filter snprintf.o strlcpy.o win32setlocale.o isinf.o, $(LIBOBJS)) $(WIN32RES)
 
 # thread.c is needed only for non-WIN32 implementation of path.c
 ifneq ($(PORTNAME), win32)
@@ -76,6 +77,6 @@ uninstall: uninstall-lib
 
 clean distclean: clean-lib
 	rm -f $(OBJS)
-	rm -f path.c pgstrcasecmp.c snprintf.c strlcpy.c thread.c win32setlocale.c
+	rm -f path.c pgstrcasecmp.c snprintf.c strlcpy.c thread.c win32setlocale.c isinf.c
 
 maintainer-clean: distclean maintainer-clean-lib

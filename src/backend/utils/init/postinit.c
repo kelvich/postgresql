@@ -80,7 +80,7 @@ static void process_settings(Oid databaseid, Oid roleid);
  * GetDatabaseTuple -- fetch the pg_database row for a database
  *
  * This is used during backend startup when we don't yet have any access to
- * system catalogs in general.	In the worst case, we can seqscan pg_database
+ * system catalogs in general.  In the worst case, we can seqscan pg_database
  * using nothing but the hard-wired descriptor that relcache.c creates for
  * pg_database.  In more typical cases, relcache.c was able to load
  * descriptors for both pg_database and its indexes from the shared relcache
@@ -104,7 +104,7 @@ GetDatabaseTuple(const char *dbname)
 				CStringGetDatum(dbname));
 
 	/*
-	 * Open pg_database and fetch a tuple.	Force heap scan if we haven't yet
+	 * Open pg_database and fetch a tuple.  Force heap scan if we haven't yet
 	 * built the critical shared relcache entries (i.e., we're starting up
 	 * without a shared relcache cache file).
 	 */
@@ -147,7 +147,7 @@ GetDatabaseTupleByOid(Oid dboid)
 				ObjectIdGetDatum(dboid));
 
 	/*
-	 * Open pg_database and fetch a tuple.	Force heap scan if we haven't yet
+	 * Open pg_database and fetch a tuple.  Force heap scan if we haven't yet
 	 * built the critical shared relcache entries (i.e., we're starting up
 	 * without a shared relcache cache file).
 	 */
@@ -186,7 +186,7 @@ PerformAuthentication(Port *port)
 	 * In EXEC_BACKEND case, we didn't inherit the contents of pg_hba.conf
 	 * etcetera from the postmaster, and have to load them ourselves.
 	 *
-	 * FIXME: [fork/exec] Ugh.	Is there a way around this overhead?
+	 * FIXME: [fork/exec] Ugh.  Is there a way around this overhead?
 	 */
 #ifdef EXEC_BACKEND
 	if (!load_hba())
@@ -231,11 +231,12 @@ PerformAuthentication(Port *port)
 	{
 		if (am_walsender)
 		{
-#ifdef USE_SSL
-			if (port->ssl)
+#ifdef USE_OPENSSL
+			if (port->ssl_in_use)
 				ereport(LOG,
-						(errmsg("replication connection authorized: user=%s SSL enabled (protocol=%s, cipher=%s)",
-								port->user_name, SSL_get_version(port->ssl), SSL_get_cipher(port->ssl))));
+						(errmsg("replication connection authorized: user=%s SSL enabled (protocol=%s, cipher=%s, compression=%s)",
+								port->user_name, SSL_get_version(port->ssl), SSL_get_cipher(port->ssl),
+								SSL_get_current_compression(port->ssl) ? _("on") : _("off"))));
 			else
 #endif
 				ereport(LOG,
@@ -244,11 +245,12 @@ PerformAuthentication(Port *port)
 		}
 		else
 		{
-#ifdef USE_SSL
-			if (port->ssl)
+#ifdef USE_OPENSSL
+			if (port->ssl_in_use)
 				ereport(LOG,
-						(errmsg("connection authorized: user=%s database=%s SSL enabled (protocol=%s, cipher=%s)",
-								port->user_name, port->database_name, SSL_get_version(port->ssl), SSL_get_cipher(port->ssl))));
+						(errmsg("connection authorized: user=%s database=%s SSL enabled (protocol=%s, cipher=%s, compression=%s)",
+								port->user_name, port->database_name, SSL_get_version(port->ssl), SSL_get_cipher(port->ssl),
+								SSL_get_current_compression(port->ssl) ? _("on") : _("off"))));
 			else
 #endif
 				ereport(LOG,
@@ -310,7 +312,7 @@ CheckMyDatabase(const char *name, bool am_superuser)
 					name)));
 
 		/*
-		 * Check privilege to connect to the database.	(The am_superuser test
+		 * Check privilege to connect to the database.  (The am_superuser test
 		 * is redundant, but since we have the flag, might as well check it
 		 * and save a few cycles.)
 		 */
@@ -326,7 +328,7 @@ CheckMyDatabase(const char *name, bool am_superuser)
 		 * Check connection limit for this database.
 		 *
 		 * There is a race condition here --- we create our PGPROC before
-		 * checking for other PGPROCs.	If two backends did this at about the
+		 * checking for other PGPROCs.  If two backends did this at about the
 		 * same time, they might both think they were over the limit, while
 		 * ideally one should succeed and one fail.  Getting that to work
 		 * exactly seems more trouble than it is worth, however; instead we
@@ -407,32 +409,57 @@ InitCommunication(void)
 /*
  * pg_split_opts -- split a string of options and append it to an argv array
  *
- * NB: the input string is destructively modified!	Also, caller is responsible
- * for ensuring the argv array is large enough.  The maximum possible number
- * of arguments added by this routine is (strlen(optstr) + 1) / 2.
+ * The caller is responsible for ensuring the argv array is large enough.  The
+ * maximum possible number of arguments added by this routine is
+ * (strlen(optstr) + 1) / 2.
  *
- * Since no current POSTGRES arguments require any quoting characters,
- * we can use the simple-minded tactic of assuming each set of space-
- * delimited characters is a separate argv element.
- *
- * If you don't like that, well, we *used* to pass the whole option string
- * as ONE argument to execl(), which was even less intelligent...
+ * Because some option values can contain spaces we allow escaping using
+ * backslashes, with \\ representing a literal backslash.
  */
 void
 pg_split_opts(char **argv, int *argcp, char *optstr)
 {
+	StringInfoData s;
+
+	initStringInfo(&s);
+
 	while (*optstr)
 	{
+		bool		last_was_escape = false;
+
+		resetStringInfo(&s);
+
+		/* skip over leading space */
 		while (isspace((unsigned char) *optstr))
 			optstr++;
+
 		if (*optstr == '\0')
 			break;
-		argv[(*argcp)++] = optstr;
-		while (*optstr && !isspace((unsigned char) *optstr))
+
+		/*
+		 * Parse a single option + value, stopping at the first space, unless
+		 * it's escaped.
+		 */
+		while (*optstr)
+		{
+			if (isspace((unsigned char) *optstr) && !last_was_escape)
+				break;
+
+			if (!last_was_escape && *optstr == '\\')
+				last_was_escape = true;
+			else
+			{
+				last_was_escape = false;
+				appendStringInfoChar(&s, *optstr);
+			}
+
 			optstr++;
-		if (*optstr)
-			*optstr++ = '\0';
+		}
+
+		/* now store the option */
+		argv[(*argcp)++] = pstrdup(s.data);
 	}
+	resetStringInfo(&s);
 }
 
 /*
@@ -454,7 +481,7 @@ InitializeMaxBackends(void)
 
 	/* the extra unit accounts for the autovacuum launcher */
 	MaxBackends = MaxConnections + autovacuum_max_workers + 1 +
-		+ max_worker_processes;
+		+max_worker_processes;
 
 	/* internal error because the values were all checked previously */
 	if (MaxBackends > MAX_BACKENDS)
@@ -491,7 +518,7 @@ BaseInit(void)
  *		Initialize POSTGRES.
  *
  * The database can be specified by name, using the in_dbname parameter, or by
- * OID, using the dboid parameter.	In the latter case, the actual database
+ * OID, using the dboid parameter.  In the latter case, the actual database
  * name can be returned to the caller in out_dbname.  If out_dbname isn't
  * NULL, it must point to a buffer of size NAMEDATALEN.
  *
@@ -729,11 +756,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 				(errcode(ERRCODE_TOO_MANY_CONNECTIONS),
 				 errmsg("remaining connection slots are reserved for non-replication superuser connections")));
 
-	/*
-	 * If walsender, we don't want to connect to any particular database. Just
-	 * finish the backend startup by processing any options from the startup
-	 * packet, and we're done.
-	 */
+	/* Check replication permissions needed for walsender processes. */
 	if (am_walsender)
 	{
 		Assert(!bootstrap);
@@ -742,7 +765,16 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 			ereport(FATAL,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("must be superuser or replication role to start walsender")));
+	}
 
+	/*
+	 * If this is a plain walsender only supporting physical replication, we
+	 * don't want to connect to any particular database. Just finish the
+	 * backend startup by processing any options from the startup packet, and
+	 * we're done.
+	 */
+	if (am_walsender && !am_db_walsender)
+	{
 		/* process any options passed in the startup packet */
 		if (MyProcPort != NULL)
 			process_startup_options(MyProcPort, am_superuser);
@@ -907,7 +939,7 @@ InitPostgres(const char *in_dbname, Oid dboid, const char *username,
 
 	/*
 	 * Now process any command-line switches and any additional GUC variable
-	 * settings passed in the startup packet.	We couldn't do this before
+	 * settings passed in the startup packet.   We couldn't do this before
 	 * because we didn't know if client is a superuser.
 	 */
 	if (MyProcPort != NULL)
@@ -950,7 +982,7 @@ process_startup_options(Port *port, bool am_superuser)
 	GucContext	gucctx;
 	ListCell   *gucopts;
 
-	gucctx = am_superuser ? PGC_SUSET : PGC_BACKEND;
+	gucctx = am_superuser ? PGC_SU_BACKEND : PGC_BACKEND;
 
 	/*
 	 * First process any command-line switches that were included in the
@@ -974,7 +1006,6 @@ process_startup_options(Port *port, bool am_superuser)
 
 		av[ac++] = "postgres";
 
-		/* Note this mangles port->cmdline_options */
 		pg_split_opts(av, &ac, port->cmdline_options);
 
 		av[ac] = NULL;

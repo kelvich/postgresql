@@ -15,7 +15,9 @@
 #include "access/xlogdefs.h"
 #include "datatype/timestamp.h"
 #include "lib/stringinfo.h"
+#include "storage/block.h"
 #include "storage/buf.h"
+#include "storage/relfilenode.h"
 #include "utils/pg_crc.h"
 
 /*
@@ -31,11 +33,11 @@
  * where there can be zero to four backup blocks (as signaled by xl_info flag
  * bits).  XLogRecord structs always start on MAXALIGN boundaries in the WAL
  * files, and we round up SizeOfXLogRecord so that the rmgr data is also
- * guaranteed to begin on a MAXALIGN boundary.	However, no padding is added
+ * guaranteed to begin on a MAXALIGN boundary.  However, no padding is added
  * to align BkpBlock structs or backup block data.
  *
  * NOTE: xl_len counts only the rmgr data, not the XLogRecord header,
- * and also not any backup blocks.	xl_tot_len counts everything.  Neither
+ * and also not any backup blocks.  xl_tot_len counts everything.  Neither
  * length field is rounded up to an alignment boundary.
  */
 typedef struct XLogRecord
@@ -100,7 +102,7 @@ extern int	sync_method;
  * value (ignoring InvalidBuffer) appearing in the rdata chain.
  *
  * When buffer is valid, caller must set buffer_std to indicate whether the
- * page uses standard pd_lower/pd_upper header fields.	If this is true, then
+ * page uses standard pd_lower/pd_upper header fields.  If this is true, then
  * XLOG is allowed to omit the free space between pd_lower and pd_upper from
  * the backed-up page image.  Note that even when buffer_std is false, the
  * page MUST have an LSN field as its first eight bytes!
@@ -192,7 +194,6 @@ extern bool EnableHotStandby;
 extern bool fullPageWrites;
 extern bool wal_log_hints;
 extern bool log_checkpoints;
-extern int	num_xloginsert_slots;
 
 /* WAL levels */
 typedef enum WalLevel
@@ -279,15 +280,20 @@ typedef struct CheckpointStatsData
 extern CheckpointStatsData CheckpointStats;
 
 extern XLogRecPtr XLogInsert(RmgrId rmid, uint8 info, XLogRecData *rdata);
+extern bool XLogCheckBufferNeedsBackup(Buffer buffer);
 extern void XLogFlush(XLogRecPtr RecPtr);
 extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr RecPtr);
 extern int	XLogFileInit(XLogSegNo segno, bool *use_existent, bool use_lock);
 extern int	XLogFileOpen(XLogSegNo segno);
 
+extern XLogRecPtr log_newpage(RelFileNode *rnode, ForkNumber forkNum,
+			BlockNumber blk, char *page, bool page_std);
+extern XLogRecPtr log_newpage_buffer(Buffer buffer, bool page_std);
 extern XLogRecPtr XLogSaveBufferForHint(Buffer buffer, bool buffer_std);
 
 extern void CheckXLogRemoved(XLogSegNo segno, TimeLineID tli);
+extern XLogSegNo XLogGetLastRemovedSegno(void);
 extern void XLogSetAsyncXactLSN(XLogRecPtr record);
 extern void XLogSetReplicationSlotMinimumLSN(XLogRecPtr lsn);
 
@@ -296,7 +302,8 @@ extern Buffer RestoreBackupBlock(XLogRecPtr lsn, XLogRecord *record,
 				   bool get_cleanup_lock, bool keep_buffer);
 
 extern void xlog_redo(XLogRecPtr lsn, XLogRecord *record);
-extern void xlog_desc(StringInfo buf, uint8 xl_info, char *rec);
+extern void xlog_desc(StringInfo buf, XLogRecord *record);
+extern const char *xlog_identify(uint8 info);
 
 extern void issue_xlog_fsync(int fd, XLogSegNo segno);
 
