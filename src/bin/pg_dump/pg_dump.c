@@ -4,7 +4,7 @@
  *	  pg_dump is a utility for dumping out a postgres database
  *	  into a script file.
  *
- * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	pg_dump will read the system catalogs in a database and dump out a
@@ -126,7 +126,8 @@ static const CatalogId nilCatalogId = {0, 0};
 
 static void help(const char *progname);
 static void setup_connection(Archive *AH, DumpOptions *dopt,
-				 const char *dumpencoding, char *use_role);
+				const char *dumpencoding, const char *dumpsnapshot,
+				char *use_role);
 static ArchiveFormat parseArchiveFormat(const char *format, ArchiveMode *mode);
 static void expand_schema_name_patterns(Archive *fout,
 							SimpleStringList *patterns,
@@ -232,7 +233,7 @@ static char *myFormatType(const char *typname, int32 typmod);
 static void getBlobs(Archive *fout);
 static void dumpBlob(Archive *fout, DumpOptions *dopt, BlobInfo *binfo);
 static int	dumpBlobs(Archive *fout, DumpOptions *dopt, void *arg);
-static void dumpRowSecurity(Archive *fout, DumpOptions *dopt, RowSecurityInfo *rsinfo);
+static void dumpPolicy(Archive *fout, DumpOptions *dopt, PolicyInfo *polinfo);
 static void dumpDatabase(Archive *AH, DumpOptions *dopt);
 static void dumpEncoding(Archive *AH);
 static void dumpStdStrings(Archive *AH);
@@ -269,17 +270,18 @@ main(int argc, char **argv)
 	RestoreOptions *ropt;
 	Archive    *fout;			/* the script file */
 	const char *dumpencoding = NULL;
+	const char *dumpsnapshot = NULL;
 	char	   *use_role = NULL;
 	int			numWorkers = 1;
 	trivalue	prompt_password = TRI_DEFAULT;
 	int			compressLevel = -1;
 	int			plainText = 0;
 	ArchiveFormat archiveFormat = archUnknown;
-	ArchiveMode	archiveMode;
+	ArchiveMode archiveMode;
 
-	DumpOptions *dopt = NewDumpOptions();
+	static DumpOptions dopt;
 
-	struct option long_options[] = {
+	static struct option long_options[] = {
 		{"data-only", no_argument, NULL, 'a'},
 		{"blobs", no_argument, NULL, 'b'},
 		{"clean", no_argument, NULL, 'c'},
@@ -314,25 +316,26 @@ main(int argc, char **argv)
 		/*
 		 * the following options don't have an equivalent short option letter
 		 */
-		{"attribute-inserts", no_argument, &dopt->column_inserts, 1},
-		{"binary-upgrade", no_argument, &dopt->binary_upgrade, 1},
-		{"column-inserts", no_argument, &dopt->column_inserts, 1},
-		{"disable-dollar-quoting", no_argument, &dopt->disable_dollar_quoting, 1},
-		{"disable-triggers", no_argument, &dopt->disable_triggers, 1},
-		{"enable-row-security", no_argument, &dopt->enable_row_security, 1},
+		{"attribute-inserts", no_argument, &dopt.column_inserts, 1},
+		{"binary-upgrade", no_argument, &dopt.binary_upgrade, 1},
+		{"column-inserts", no_argument, &dopt.column_inserts, 1},
+		{"disable-dollar-quoting", no_argument, &dopt.disable_dollar_quoting, 1},
+		{"disable-triggers", no_argument, &dopt.disable_triggers, 1},
+		{"enable-row-security", no_argument, &dopt.enable_row_security, 1},
 		{"exclude-table-data", required_argument, NULL, 4},
-		{"if-exists", no_argument, &dopt->if_exists, 1},
-		{"inserts", no_argument, &dopt->dump_inserts, 1},
+		{"if-exists", no_argument, &dopt.if_exists, 1},
+		{"inserts", no_argument, &dopt.dump_inserts, 1},
 		{"lock-wait-timeout", required_argument, NULL, 2},
-		{"no-tablespaces", no_argument, &dopt->outputNoTablespaces, 1},
+		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
 		{"role", required_argument, NULL, 3},
 		{"section", required_argument, NULL, 5},
-		{"serializable-deferrable", no_argument, &dopt->serializable_deferrable, 1},
-		{"use-set-session-authorization", no_argument, &dopt->use_setsessauth, 1},
-		{"no-security-labels", no_argument, &dopt->no_security_labels, 1},
-		{"no-synchronized-snapshots", no_argument, &dopt->no_synchronized_snapshots, 1},
-		{"no-unlogged-table-data", no_argument, &dopt->no_unlogged_table_data, 1},
+		{"serializable-deferrable", no_argument, &dopt.serializable_deferrable, 1},
+		{"snapshot", required_argument, NULL, 6},
+		{"use-set-session-authorization", no_argument, &dopt.use_setsessauth, 1},
+		{"no-security-labels", no_argument, &dopt.no_security_labels, 1},
+		{"no-synchronized-snapshots", no_argument, &dopt.no_synchronized_snapshots, 1},
+		{"no-unlogged-table-data", no_argument, &dopt.no_unlogged_table_data, 1},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -371,29 +374,31 @@ main(int argc, char **argv)
 		}
 	}
 
+	InitDumpOptions(&dopt);
+
 	while ((c = getopt_long(argc, argv, "abcCd:E:f:F:h:ij:n:N:oOp:RsS:t:T:U:vwWxZ:",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
 		{
 			case 'a':			/* Dump data only */
-				dopt->dataOnly = true;
+				dopt.dataOnly = true;
 				break;
 
 			case 'b':			/* Dump blobs */
-				dopt->outputBlobs = true;
+				dopt.outputBlobs = true;
 				break;
 
 			case 'c':			/* clean (i.e., drop) schema prior to create */
-				dopt->outputClean = 1;
+				dopt.outputClean = 1;
 				break;
 
 			case 'C':			/* Create DB */
-				dopt->outputCreateDB = 1;
+				dopt.outputCreateDB = 1;
 				break;
 
 			case 'd':			/* database name */
-				dopt->dbname = pg_strdup(optarg);
+				dopt.dbname = pg_strdup(optarg);
 				break;
 
 			case 'E':			/* Dump encoding */
@@ -409,7 +414,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'h':			/* server host */
-				dopt->pghost = pg_strdup(optarg);
+				dopt.pghost = pg_strdup(optarg);
 				break;
 
 			case 'i':
@@ -422,7 +427,7 @@ main(int argc, char **argv)
 
 			case 'n':			/* include schema(s) */
 				simple_string_list_append(&schema_include_patterns, optarg);
-				dopt->include_everything = false;
+				dopt.include_everything = false;
 				break;
 
 			case 'N':			/* exclude schema(s) */
@@ -430,15 +435,15 @@ main(int argc, char **argv)
 				break;
 
 			case 'o':			/* Dump oids */
-				dopt->oids = true;
+				dopt.oids = true;
 				break;
 
 			case 'O':			/* Don't reconnect to match owner */
-				dopt->outputNoOwner = 1;
+				dopt.outputNoOwner = 1;
 				break;
 
 			case 'p':			/* server port */
-				dopt->pgport = pg_strdup(optarg);
+				dopt.pgport = pg_strdup(optarg);
 				break;
 
 			case 'R':
@@ -446,16 +451,16 @@ main(int argc, char **argv)
 				break;
 
 			case 's':			/* dump schema only */
-				dopt->schemaOnly = true;
+				dopt.schemaOnly = true;
 				break;
 
 			case 'S':			/* Username for superuser in plain text output */
-				dopt->outputSuperuser = pg_strdup(optarg);
+				dopt.outputSuperuser = pg_strdup(optarg);
 				break;
 
 			case 't':			/* include table(s) */
 				simple_string_list_append(&table_include_patterns, optarg);
-				dopt->include_everything = false;
+				dopt.include_everything = false;
 				break;
 
 			case 'T':			/* exclude table(s) */
@@ -463,7 +468,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'U':
-				dopt->username = pg_strdup(optarg);
+				dopt.username = pg_strdup(optarg);
 				break;
 
 			case 'v':			/* verbose */
@@ -479,7 +484,7 @@ main(int argc, char **argv)
 				break;
 
 			case 'x':			/* skip ACL dump */
-				dopt->aclsSkip = true;
+				dopt.aclsSkip = true;
 				break;
 
 			case 'Z':			/* Compression Level */
@@ -491,7 +496,7 @@ main(int argc, char **argv)
 				break;
 
 			case 2:				/* lock-wait-timeout */
-				dopt->lockWaitTimeout = pg_strdup(optarg);
+				dopt.lockWaitTimeout = pg_strdup(optarg);
 				break;
 
 			case 3:				/* SET ROLE */
@@ -503,7 +508,11 @@ main(int argc, char **argv)
 				break;
 
 			case 5:				/* section */
-				set_dump_section(optarg, &dopt->dumpSections);
+				set_dump_section(optarg, &dopt.dumpSections);
+				break;
+
+			case 6:				/* snapshot */
+				dumpsnapshot = pg_strdup(optarg);
 				break;
 
 			default:
@@ -516,8 +525,8 @@ main(int argc, char **argv)
 	 * Non-option argument specifies database name as long as it wasn't
 	 * already specified with -d / --dbname
 	 */
-	if (optind < argc && dopt->dbname == NULL)
-		dopt->dbname = argv[optind++];
+	if (optind < argc && dopt.dbname == NULL)
+		dopt.dbname = argv[optind++];
 
 	/* Complain if any arguments remain */
 	if (optind < argc)
@@ -530,29 +539,29 @@ main(int argc, char **argv)
 	}
 
 	/* --column-inserts implies --inserts */
-	if (dopt->column_inserts)
-		dopt->dump_inserts = 1;
+	if (dopt.column_inserts)
+		dopt.dump_inserts = 1;
 
-	if (dopt->dataOnly && dopt->schemaOnly)
+	if (dopt.dataOnly && dopt.schemaOnly)
 	{
 		write_msg(NULL, "options -s/--schema-only and -a/--data-only cannot be used together\n");
 		exit_nicely(1);
 	}
 
-	if (dopt->dataOnly && dopt->outputClean)
+	if (dopt.dataOnly && dopt.outputClean)
 	{
 		write_msg(NULL, "options -c/--clean and -a/--data-only cannot be used together\n");
 		exit_nicely(1);
 	}
 
-	if (dopt->dump_inserts && dopt->oids)
+	if (dopt.dump_inserts && dopt.oids)
 	{
 		write_msg(NULL, "options --inserts/--column-inserts and -o/--oids cannot be used together\n");
 		write_msg(NULL, "(The INSERT command cannot set OIDs.)\n");
 		exit_nicely(1);
 	}
 
-	if (dopt->if_exists && !dopt->outputClean)
+	if (dopt.if_exists && !dopt.outputClean)
 		exit_horribly(NULL, "option --if-exists requires option -c/--clean\n");
 
 	/* Identify archive format to emit */
@@ -613,15 +622,15 @@ main(int argc, char **argv)
 	 * Open the database using the Archiver, so it knows about it. Errors mean
 	 * death.
 	 */
-	ConnectDatabase(fout, dopt->dbname, dopt->pghost, dopt->pgport, dopt->username, prompt_password);
-	setup_connection(fout, dopt, dumpencoding, use_role);
+	ConnectDatabase(fout, dopt.dbname, dopt.pghost, dopt.pgport, dopt.username, prompt_password);
+	setup_connection(fout, &dopt, dumpencoding, dumpsnapshot, use_role);
 
 	/*
 	 * Disable security label support if server version < v9.1.x (prevents
 	 * access to nonexistent pg_seclabel catalog)
 	 */
 	if (fout->remoteVersion < 90100)
-		dopt->no_security_labels = 1;
+		dopt.no_security_labels = 1;
 
 	/*
 	 * When running against 9.0 or later, check if we are in recovery mode,
@@ -637,7 +646,7 @@ main(int argc, char **argv)
 			 * On hot standby slaves, never try to dump unlogged table data,
 			 * since it will just throw an error.
 			 */
-			dopt->no_unlogged_table_data = true;
+			dopt.no_unlogged_table_data = true;
 		}
 		PQclear(res);
 	}
@@ -652,11 +661,16 @@ main(int argc, char **argv)
 
 	/* check the version for the synchronized snapshots feature */
 	if (numWorkers > 1 && fout->remoteVersion < 90200
-		&& !dopt->no_synchronized_snapshots)
+		&& !dopt.no_synchronized_snapshots)
 		exit_horribly(NULL,
 		 "Synchronized snapshots are not supported by this server version.\n"
 		  "Run with --no-synchronized-snapshots instead if you do not need\n"
 					  "synchronized snapshots.\n");
+
+	/* check the version when a snapshot is explicitly specified by user */
+	if (dumpsnapshot && fout->remoteVersion < 90200)
+		exit_horribly(NULL,
+			"Exported snapshots are not supported by this server version.\n");
 
 	/* Find the last built-in OID, if needed */
 	if (fout->remoteVersion < 70300)
@@ -702,27 +716,27 @@ main(int argc, char **argv)
 	 * Dumping blobs is now default unless we saw an inclusion switch or -s
 	 * ... but even if we did see one of these, -b turns it back on.
 	 */
-	if (dopt->include_everything && !dopt->schemaOnly)
-		dopt->outputBlobs = true;
+	if (dopt.include_everything && !dopt.schemaOnly)
+		dopt.outputBlobs = true;
 
 	/*
 	 * Now scan the database and create DumpableObject structs for all the
 	 * objects we intend to dump.
 	 */
-	tblinfo = getSchemaData(fout, dopt, &numTables);
+	tblinfo = getSchemaData(fout, &dopt, &numTables);
 
 	if (fout->remoteVersion < 80400)
 		guessConstraintInheritance(tblinfo, numTables);
 
-	if (!dopt->schemaOnly)
+	if (!dopt.schemaOnly)
 	{
-		getTableData(dopt, tblinfo, numTables, dopt->oids);
+		getTableData(&dopt, tblinfo, numTables, dopt.oids);
 		buildMatViewRefreshDependencies(fout);
-		if (dopt->dataOnly)
+		if (dopt.dataOnly)
 			getTableDataFKConstraints();
 	}
 
-	if (dopt->outputBlobs)
+	if (dopt.outputBlobs)
 		getBlobs(fout);
 
 	/*
@@ -772,12 +786,12 @@ main(int argc, char **argv)
 	dumpStdStrings(fout);
 
 	/* The database item is always next, unless we don't want it at all */
-	if (dopt->include_everything && !dopt->dataOnly)
-		dumpDatabase(fout, dopt);
+	if (dopt.include_everything && !dopt.dataOnly)
+		dumpDatabase(fout, &dopt);
 
 	/* Now the rearrangeable objects. */
 	for (i = 0; i < numObjs; i++)
-		dumpDumpableObject(fout, dopt, dobjs[i]);
+		dumpDumpableObject(fout, &dopt, dobjs[i]);
 
 	/*
 	 * Set up options info to ensure we dump what we want.
@@ -786,25 +800,25 @@ main(int argc, char **argv)
 	ropt->filename = filename;
 
 	/* if you change this list, see dumpOptionsFromRestoreOptions */
-	ropt->dropSchema = dopt->outputClean;
-	ropt->dataOnly = dopt->dataOnly;
-	ropt->schemaOnly = dopt->schemaOnly;
-	ropt->if_exists = dopt->if_exists;
-	ropt->column_inserts = dopt->column_inserts;
-	ropt->dumpSections = dopt->dumpSections;
-	ropt->aclsSkip = dopt->aclsSkip;
-	ropt->superuser = dopt->outputSuperuser;
-	ropt->createDB = dopt->outputCreateDB;
-	ropt->noOwner = dopt->outputNoOwner;
-	ropt->noTablespace = dopt->outputNoTablespaces;
-	ropt->disable_triggers = dopt->disable_triggers;
-	ropt->use_setsessauth = dopt->use_setsessauth;
-	ropt->disable_dollar_quoting = dopt->disable_dollar_quoting;
-	ropt->dump_inserts = dopt->dump_inserts;
-	ropt->no_security_labels = dopt->no_security_labels;
-	ropt->lockWaitTimeout = dopt->lockWaitTimeout;
-	ropt->include_everything = dopt->include_everything;
-	ropt->enable_row_security = dopt->enable_row_security;
+	ropt->dropSchema = dopt.outputClean;
+	ropt->dataOnly = dopt.dataOnly;
+	ropt->schemaOnly = dopt.schemaOnly;
+	ropt->if_exists = dopt.if_exists;
+	ropt->column_inserts = dopt.column_inserts;
+	ropt->dumpSections = dopt.dumpSections;
+	ropt->aclsSkip = dopt.aclsSkip;
+	ropt->superuser = dopt.outputSuperuser;
+	ropt->createDB = dopt.outputCreateDB;
+	ropt->noOwner = dopt.outputNoOwner;
+	ropt->noTablespace = dopt.outputNoTablespaces;
+	ropt->disable_triggers = dopt.disable_triggers;
+	ropt->use_setsessauth = dopt.use_setsessauth;
+	ropt->disable_dollar_quoting = dopt.disable_dollar_quoting;
+	ropt->dump_inserts = dopt.dump_inserts;
+	ropt->no_security_labels = dopt.no_security_labels;
+	ropt->lockWaitTimeout = dopt.lockWaitTimeout;
+	ropt->include_everything = dopt.include_everything;
+	ropt->enable_row_security = dopt.enable_row_security;
 
 	if (compressLevel == -1)
 		ropt->compression = 0;
@@ -833,7 +847,7 @@ main(int argc, char **argv)
 	if (plainText)
 		RestoreArchive(fout);
 
-	CloseArchive(fout, dopt);
+	CloseArchive(fout, &dopt);
 
 	exit_nicely(0);
 }
@@ -888,6 +902,7 @@ help(const char *progname)
 	printf(_("  --quote-all-identifiers      quote all identifiers, even if not key words\n"));
 	printf(_("  --section=SECTION            dump named section (pre-data, data, or post-data)\n"));
 	printf(_("  --serializable-deferrable    wait until the dump can run without anomalies\n"));
+	printf(_("  --snapshot=SNAPSHOT          use given synchronous snapshot for the dump\n"));
 	printf(_("  --use-set-session-authorization\n"
 			 "                               use SET SESSION AUTHORIZATION commands instead of\n"
 			 "                               ALTER OWNER commands to set ownership\n"));
@@ -907,7 +922,8 @@ help(const char *progname)
 }
 
 static void
-setup_connection(Archive *AH, DumpOptions *dopt, const char *dumpencoding, char *use_role)
+setup_connection(Archive *AH, DumpOptions *dopt, const char *dumpencoding,
+				 const char *dumpsnapshot, char *use_role)
 {
 	PGconn	   *conn = GetConnection(AH);
 	const char *std_strings;
@@ -995,7 +1011,15 @@ setup_connection(Archive *AH, DumpOptions *dopt, const char *dumpencoding, char 
 	ExecuteSqlStatement(AH, "BEGIN");
 	if (AH->remoteVersion >= 90100)
 	{
-		if (dopt->serializable_deferrable)
+		/*
+		 * To support the combination of serializable_deferrable with the jobs
+		 * option we use REPEATABLE READ for the worker connections that are
+		 * passed a snapshot.  As long as the snapshot is acquired in a
+		 * SERIALIZABLE, READ ONLY, DEFERRABLE transaction, its use within a
+		 * REPEATABLE READ transaction provides the appropriate integrity
+		 * guarantees.  This is a kluge, but safe for back-patching.
+		 */
+		if (dopt->serializable_deferrable && AH->sync_snapshot_id == NULL)
 			ExecuteSqlStatement(AH,
 								"SET TRANSACTION ISOLATION LEVEL "
 								"SERIALIZABLE, READ ONLY, DEFERRABLE");
@@ -1015,22 +1039,25 @@ setup_connection(Archive *AH, DumpOptions *dopt, const char *dumpencoding, char 
 		ExecuteSqlStatement(AH,
 							"SET TRANSACTION ISOLATION LEVEL SERIALIZABLE");
 
+	/*
+	 * define an export snapshot, either chosen by user or needed for
+	 * parallel dump.
+	 */
+	if (dumpsnapshot)
+		AH->sync_snapshot_id = strdup(dumpsnapshot);
 
-
-	if (AH->numWorkers > 1 && AH->remoteVersion >= 90200 && !dopt->no_synchronized_snapshots)
+	if (AH->sync_snapshot_id)
 	{
-		if (AH->sync_snapshot_id)
-		{
-			PQExpBuffer query = createPQExpBuffer();
-
-			appendPQExpBufferStr(query, "SET TRANSACTION SNAPSHOT ");
-			appendStringLiteralConn(query, AH->sync_snapshot_id, conn);
-			ExecuteSqlStatement(AH, query->data);
-			destroyPQExpBuffer(query);
-		}
-		else
-			AH->sync_snapshot_id = get_synchronized_snapshot(AH);
+		PQExpBuffer query = createPQExpBuffer();
+		appendPQExpBuffer(query, "SET TRANSACTION SNAPSHOT ");
+		appendStringLiteralConn(query, AH->sync_snapshot_id, conn);
+		ExecuteSqlStatement(AH, query->data);
+		destroyPQExpBuffer(query);
 	}
+	else if (AH->numWorkers > 1 &&
+			 AH->remoteVersion >= 90200 &&
+			 !dopt->no_synchronized_snapshots)
+		AH->sync_snapshot_id = get_synchronized_snapshot(AH);
 
 	if (AH->remoteVersion >= 90500)
 	{
@@ -1044,7 +1071,7 @@ setup_connection(Archive *AH, DumpOptions *dopt, const char *dumpencoding, char 
 static void
 setupDumpWorker(Archive *AHX, DumpOptions *dopt, RestoreOptions *ropt)
 {
-	setup_connection(AHX, dopt, NULL, NULL);
+	setup_connection(AHX, dopt, NULL, NULL, NULL);
 }
 
 static char *
@@ -2156,7 +2183,8 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 			   *collate,
 			   *ctype,
 			   *tablespace;
-	uint32		frozenxid, minmxid;
+	uint32		frozenxid,
+				minmxid;
 
 	datname = PQdb(conn);
 
@@ -2186,7 +2214,7 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, "
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
-						  "datcollate, datctype, datfrozenxid, 0 AS datminmxid, "
+					  "datcollate, datctype, datfrozenxid, 0 AS datminmxid, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 					  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2200,7 +2228,7 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, "
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
-					   "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
+						  "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace, "
 					  "shobj_description(oid, 'pg_database') AS description "
 
@@ -2214,7 +2242,7 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 		appendPQExpBuffer(dbQry, "SELECT tableoid, oid, "
 						  "(%s datdba) AS dba, "
 						  "pg_encoding_to_char(encoding) AS encoding, "
-					   "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
+						  "NULL AS datcollate, NULL AS datctype, datfrozenxid, 0 AS datminmxid, "
 						  "(SELECT spcname FROM pg_tablespace t WHERE t.oid = dattablespace) AS tablespace "
 						  "FROM pg_database "
 						  "WHERE datname = ",
@@ -2338,7 +2366,8 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 		PGresult   *lo_res;
 		PQExpBuffer loFrozenQry = createPQExpBuffer();
 		PQExpBuffer loOutQry = createPQExpBuffer();
-		int			i_relfrozenxid, i_relminmxid;
+		int			i_relfrozenxid,
+					i_relminmxid;
 
 		/*
 		 * pg_largeobject
@@ -2383,16 +2412,16 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 			resetPQExpBuffer(loFrozenQry);
 			resetPQExpBuffer(loOutQry);
 
-		if (fout->remoteVersion >= 90300)
-			appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, relminmxid\n"
-							  "FROM pg_catalog.pg_class\n"
-							  "WHERE oid = %u;\n",
-							  LargeObjectMetadataRelationId);
-		else
-			appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, 0 AS relminmxid\n"
-							  "FROM pg_catalog.pg_class\n"
-							  "WHERE oid = %u;\n",
-							  LargeObjectMetadataRelationId);
+			if (fout->remoteVersion >= 90300)
+				appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, relminmxid\n"
+								  "FROM pg_catalog.pg_class\n"
+								  "WHERE oid = %u;\n",
+								  LargeObjectMetadataRelationId);
+			else
+				appendPQExpBuffer(loFrozenQry, "SELECT relfrozenxid, 0 AS relminmxid\n"
+								  "FROM pg_catalog.pg_class\n"
+								  "WHERE oid = %u;\n",
+								  LargeObjectMetadataRelationId);
 
 			lo_res = ExecuteSqlQueryForSingleRow(fout, loFrozenQry->data);
 
@@ -2455,24 +2484,28 @@ dumpDatabase(Archive *fout, DumpOptions *dopt)
 					dbCatId, 0, dbDumpId);
 	}
 
-	PQclear(res);
-
 	/* Dump shared security label. */
 	if (!dopt->no_security_labels && fout->remoteVersion >= 90200)
 	{
-		PQExpBuffer seclabelQry = createPQExpBuffer();
+		PGresult   *shres;
+		PQExpBuffer seclabelQry;
+
+		seclabelQry = createPQExpBuffer();
 
 		buildShSecLabelQuery(conn, "pg_database", dbCatId.oid, seclabelQry);
-		res = ExecuteSqlQuery(fout, seclabelQry->data, PGRES_TUPLES_OK);
+		shres = ExecuteSqlQuery(fout, seclabelQry->data, PGRES_TUPLES_OK);
 		resetPQExpBuffer(seclabelQry);
-		emitShSecLabels(conn, res, seclabelQry, "DATABASE", datname);
+		emitShSecLabels(conn, shres, seclabelQry, "DATABASE", datname);
 		if (strlen(seclabelQry->data))
 			ArchiveEntry(fout, dbCatId, createDumpId(), datname, NULL, NULL,
 						 dba, false, "SECURITY LABEL", SECTION_NONE,
 						 seclabelQry->data, "", NULL,
 						 &dbDumpId, 1, NULL, NULL);
 		destroyPQExpBuffer(seclabelQry);
+		PQclear(shres);
 	}
+
+	PQclear(res);
 
 	destroyPQExpBuffer(dbQry);
 	destroyPQExpBuffer(delQry);
@@ -2746,23 +2779,25 @@ dumpBlobs(Archive *fout, DumpOptions *dopt, void *arg)
 }
 
 /*
- * getRowSecurity
- *    get information about every row-security policy on a dumpable table.
+ * getPolicies
+ *	  get information about policies on a dumpable table.
  */
 void
-getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
+getPolicies(Archive *fout, TableInfo tblinfo[], int numTables)
 {
-	PQExpBuffer		query;
-	PGresult	   *res;
-	RowSecurityInfo *rsinfo;
-	int				i_oid;
-	int				i_tableoid;
-	int				i_rsecpolname;
-	int				i_rseccmd;
-	int				i_rsecroles;
-	int				i_rsecqual;
-	int				i_rsecwithcheck;
-	int				i, j, ntups;
+	PQExpBuffer query;
+	PGresult   *res;
+	PolicyInfo *polinfo;
+	int			i_oid;
+	int			i_tableoid;
+	int			i_polname;
+	int			i_polcmd;
+	int			i_polroles;
+	int			i_polqual;
+	int			i_polwithcheck;
+	int			i,
+				j,
+				ntups;
 
 	if (fout->remoteVersion < 90500)
 		return;
@@ -2771,21 +2806,21 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 
 	for (i = 0; i < numTables; i++)
 	{
-		TableInfo *tbinfo = &tblinfo[i];
+		TableInfo  *tbinfo = &tblinfo[i];
 
-		/* Ignore row-security on tables not to be dumped */
+		/* Ignore row security on tables not to be dumped */
 		if (!tbinfo->dobj.dump)
 			continue;
 
 		if (g_verbose)
-			write_msg(NULL, "reading row-security enabled for table \"%s\".\"%s\"\n",
+			write_msg(NULL, "reading row security enabled for table \"%s\".\"%s\"\n",
 					  tbinfo->dobj.namespace->dobj.name,
 					  tbinfo->dobj.name);
 
 		/*
-		 * Get row-security enabled information for the table.
-		 * We represent RLS enabled on a table by creating RowSecurityInfo
-		 * object with an empty policy.
+		 * Get row security enabled information for the table. We represent
+		 * RLS enabled on a table by creating PolicyInfo object with an
+		 * empty policy.
 		 */
 		if (tbinfo->rowsec)
 		{
@@ -2793,23 +2828,23 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 			 * Note: use tableoid 0 so that this object won't be mistaken for
 			 * something that pg_depend entries apply to.
 			 */
-			rsinfo = pg_malloc(sizeof(RowSecurityInfo));
-			rsinfo->dobj.objType = DO_ROW_SECURITY;
-			rsinfo->dobj.catId.tableoid = 0;
-			rsinfo->dobj.catId.oid = tbinfo->dobj.catId.oid;
-			AssignDumpId(&rsinfo->dobj);
-			rsinfo->dobj.namespace = tbinfo->dobj.namespace;
-			rsinfo->dobj.name = pg_strdup(tbinfo->dobj.name);
-			rsinfo->rstable = tbinfo;
-			rsinfo->rsecpolname = NULL;
-			rsinfo->rseccmd = NULL;
-			rsinfo->rsecroles = NULL;
-			rsinfo->rsecqual = NULL;
-			rsinfo->rsecwithcheck = NULL;
+			polinfo = pg_malloc(sizeof(PolicyInfo));
+			polinfo->dobj.objType = DO_POLICY;
+			polinfo->dobj.catId.tableoid = 0;
+			polinfo->dobj.catId.oid = tbinfo->dobj.catId.oid;
+			AssignDumpId(&polinfo->dobj);
+			polinfo->dobj.namespace = tbinfo->dobj.namespace;
+			polinfo->dobj.name = pg_strdup(tbinfo->dobj.name);
+			polinfo->poltable = tbinfo;
+			polinfo->polname = NULL;
+			polinfo->polcmd = NULL;
+			polinfo->polroles = NULL;
+			polinfo->polqual = NULL;
+			polinfo->polwithcheck = NULL;
 		}
 
 		if (g_verbose)
-			write_msg(NULL, "reading row-security policies for table \"%s\".\"%s\"\n",
+			write_msg(NULL, "reading policies for table \"%s\".\"%s\"\n",
 					  tbinfo->dobj.namespace->dobj.name,
 					  tbinfo->dobj.name);
 
@@ -2822,13 +2857,13 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 
 		/* Get the policies for the table. */
 		appendPQExpBuffer(query,
-						  "SELECT oid, tableoid, s.rsecpolname, s.rseccmd, "
-						  "CASE WHEN s.rsecroles = '{0}' THEN 'PUBLIC' ELSE "
-						  "   array_to_string(ARRAY(SELECT rolname from pg_roles WHERE oid = ANY(s.rsecroles)), ', ') END AS rsecroles, "
-						  "pg_get_expr(s.rsecqual, s.rsecrelid) AS rsecqual, "
-						  "pg_get_expr(s.rsecwithcheck, s.rsecrelid) AS rsecwithcheck "
-						  "FROM pg_catalog.pg_rowsecurity s "
-						  "WHERE rsecrelid = '%u'",
+						  "SELECT oid, tableoid, pol.polname, pol.polcmd, "
+						  "CASE WHEN pol.polroles = '{0}' THEN 'PUBLIC' ELSE "
+						  "   pg_catalog.array_to_string(ARRAY(SELECT pg_catalog.quote_ident(rolname) from pg_catalog.pg_roles WHERE oid = ANY(pol.polroles)), ', ') END AS polroles, "
+						  "pg_catalog.pg_get_expr(pol.polqual, pol.polrelid) AS polqual, "
+				"pg_catalog.pg_get_expr(pol.polwithcheck, pol.polrelid) AS polwithcheck "
+						  "FROM pg_catalog.pg_policy pol "
+						  "WHERE polrelid = '%u'",
 						  tbinfo->dobj.catId.oid);
 		res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
 
@@ -2838,7 +2873,7 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 		{
 			/*
 			 * No explicit policies to handle (only the default-deny policy,
-			 * which is handled as part of the table definition.  Clean up and
+			 * which is handled as part of the table definition).  Clean up and
 			 * return.
 			 */
 			PQclear(res);
@@ -2847,45 +2882,39 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 
 		i_oid = PQfnumber(res, "oid");
 		i_tableoid = PQfnumber(res, "tableoid");
-		i_rsecpolname = PQfnumber(res, "rsecpolname");
-		i_rseccmd = PQfnumber(res, "rseccmd");
-		i_rsecroles = PQfnumber(res, "rsecroles");
-		i_rsecqual = PQfnumber(res, "rsecqual");
-		i_rsecwithcheck = PQfnumber(res, "rsecwithcheck");
+		i_polname = PQfnumber(res, "polname");
+		i_polcmd = PQfnumber(res, "polcmd");
+		i_polroles = PQfnumber(res, "polroles");
+		i_polqual = PQfnumber(res, "polqual");
+		i_polwithcheck = PQfnumber(res, "polwithcheck");
 
-		rsinfo = pg_malloc(ntups * sizeof(RowSecurityInfo));
+		polinfo = pg_malloc(ntups * sizeof(PolicyInfo));
 
 		for (j = 0; j < ntups; j++)
 		{
-			rsinfo[j].dobj.objType = DO_ROW_SECURITY;
-			rsinfo[j].dobj.catId.tableoid =
+			polinfo[j].dobj.objType = DO_POLICY;
+			polinfo[j].dobj.catId.tableoid =
 				atooid(PQgetvalue(res, j, i_tableoid));
-			rsinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
-			AssignDumpId(&rsinfo[j].dobj);
-			rsinfo[j].dobj.namespace = tbinfo->dobj.namespace;
-			rsinfo[j].rstable = tbinfo;
-			rsinfo[j].rsecpolname = pg_strdup(PQgetvalue(res, j,
-														 i_rsecpolname));
+			polinfo[j].dobj.catId.oid = atooid(PQgetvalue(res, j, i_oid));
+			AssignDumpId(&polinfo[j].dobj);
+			polinfo[j].dobj.namespace = tbinfo->dobj.namespace;
+			polinfo[j].poltable = tbinfo;
+			polinfo[j].polname = pg_strdup(PQgetvalue(res, j, i_polname));
+			polinfo[j].dobj.name = pg_strdup(polinfo[j].polname);
 
-			rsinfo[j].dobj.name = pg_strdup(rsinfo[j].rsecpolname);
+			polinfo[j].polcmd = pg_strdup(PQgetvalue(res, j, i_polcmd));
+			polinfo[j].polroles = pg_strdup(PQgetvalue(res, j, i_polroles));
 
-			if (PQgetisnull(res, j, i_rseccmd))
-				rsinfo[j].rseccmd = NULL;
+			if (PQgetisnull(res, j, i_polqual))
+				polinfo[j].polqual = NULL;
 			else
-				rsinfo[j].rseccmd = pg_strdup(PQgetvalue(res, j, i_rseccmd));
+				polinfo[j].polqual = pg_strdup(PQgetvalue(res, j, i_polqual));
 
-			rsinfo[j].rsecroles = pg_strdup(PQgetvalue(res, j, i_rsecroles));
-
-			if (PQgetisnull(res, j, i_rsecqual))
-				rsinfo[j].rsecqual = NULL;
+			if (PQgetisnull(res, j, i_polwithcheck))
+				polinfo[j].polwithcheck = NULL;
 			else
-				rsinfo[j].rsecqual = pg_strdup(PQgetvalue(res, j, i_rsecqual));
-
-			if (PQgetisnull(res, j, i_rsecwithcheck))
-				rsinfo[j].rsecwithcheck = NULL;
-			else
-				rsinfo[j].rsecwithcheck
-					= pg_strdup(PQgetvalue(res, j, i_rsecwithcheck));
+				polinfo[j].polwithcheck
+					= pg_strdup(PQgetvalue(res, j, i_polwithcheck));
 		}
 		PQclear(res);
 	}
@@ -2893,13 +2922,13 @@ getRowSecurity(Archive *fout, TableInfo tblinfo[], int numTables)
 }
 
 /*
- * dumpRowSecurity
- *    dump the definition of the given row-security policy
+ * dumpPolicy
+ *	  dump the definition of the given policy
  */
 static void
-dumpRowSecurity(Archive *fout, DumpOptions *dopt, RowSecurityInfo *rsinfo)
+dumpPolicy(Archive *fout, DumpOptions *dopt, PolicyInfo *polinfo)
 {
-	TableInfo  *tbinfo = rsinfo->rstable;
+	TableInfo  *tbinfo = polinfo->poltable;
 	PQExpBuffer query;
 	PQExpBuffer delqry;
 	const char *cmd;
@@ -2908,23 +2937,23 @@ dumpRowSecurity(Archive *fout, DumpOptions *dopt, RowSecurityInfo *rsinfo)
 		return;
 
 	/*
-	 * If rsecpolname is NULL, then this record is just indicating that ROW
-	 * LEVEL SECURITY is enabled for the table.
-	 * Dump as ALTER TABLE <table> ENABLE ROW LEVEL SECURITY.
+	 * If polname is NULL, then this record is just indicating that ROW
+	 * LEVEL SECURITY is enabled for the table. Dump as ALTER TABLE <table>
+	 * ENABLE ROW LEVEL SECURITY.
 	 */
-	if (rsinfo->rsecpolname == NULL)
+	if (polinfo->polname == NULL)
 	{
 		query = createPQExpBuffer();
 
 		appendPQExpBuffer(query, "ALTER TABLE %s ENABLE ROW LEVEL SECURITY;",
-						  fmtId(rsinfo->dobj.name));
+						  fmtId(polinfo->dobj.name));
 
-		ArchiveEntry(fout, rsinfo->dobj.catId, rsinfo->dobj.dumpId,
-					 rsinfo->dobj.name,
-					 rsinfo->dobj.namespace->dobj.name,
+		ArchiveEntry(fout, polinfo->dobj.catId, polinfo->dobj.dumpId,
+					 polinfo->dobj.name,
+					 polinfo->dobj.namespace->dobj.name,
 					 NULL,
 					 tbinfo->rolname, false,
-					 "ROW SECURITY", SECTION_NONE,
+					 "ROW SECURITY", SECTION_POST_DATA,
 					 query->data, "", NULL,
 					 NULL, 0,
 					 NULL, NULL);
@@ -2933,48 +2962,49 @@ dumpRowSecurity(Archive *fout, DumpOptions *dopt, RowSecurityInfo *rsinfo)
 		return;
 	}
 
-	if (!rsinfo->rseccmd)
+	if (strcmp(polinfo->polcmd, "*") == 0)
 		cmd = "ALL";
-	else if (strcmp(rsinfo->rseccmd, "r") == 0)
+	else if (strcmp(polinfo->polcmd, "r") == 0)
 		cmd = "SELECT";
-	else if (strcmp(rsinfo->rseccmd, "a") == 0)
+	else if (strcmp(polinfo->polcmd, "a") == 0)
 		cmd = "INSERT";
-	else if (strcmp(rsinfo->rseccmd, "u") == 0)
+	else if (strcmp(polinfo->polcmd, "w") == 0)
 		cmd = "UPDATE";
-	else if (strcmp(rsinfo->rseccmd, "d") == 0)
+	else if (strcmp(polinfo->polcmd, "d") == 0)
 		cmd = "DELETE";
 	else
 	{
-		write_msg(NULL, "unexpected command type: '%s'\n", rsinfo->rseccmd);
+		write_msg(NULL, "unexpected policy command type: \"%s\"\n",
+				  polinfo->polcmd);
 		exit_nicely(1);
 	}
 
 	query = createPQExpBuffer();
 	delqry = createPQExpBuffer();
 
-	appendPQExpBuffer(query, "CREATE POLICY %s ON %s FOR %s",
-					  rsinfo->rsecpolname, fmtId(tbinfo->dobj.name), cmd);
+	appendPQExpBuffer(query, "CREATE POLICY %s", fmtId(polinfo->polname));
+	appendPQExpBuffer(query, " ON %s FOR %s", fmtId(tbinfo->dobj.name), cmd);
 
-	if (rsinfo->rsecroles != NULL)
-		appendPQExpBuffer(query, " TO %s", rsinfo->rsecroles);
+	if (polinfo->polroles != NULL)
+		appendPQExpBuffer(query, " TO %s", polinfo->polroles);
 
-	if (rsinfo->rsecqual != NULL)
-		appendPQExpBuffer(query, " USING %s", rsinfo->rsecqual);
+	if (polinfo->polqual != NULL)
+		appendPQExpBuffer(query, " USING %s", polinfo->polqual);
 
-	if (rsinfo->rsecwithcheck != NULL)
-		appendPQExpBuffer(query, " WITH CHECK %s", rsinfo->rsecwithcheck);
+	if (polinfo->polwithcheck != NULL)
+		appendPQExpBuffer(query, " WITH CHECK %s", polinfo->polwithcheck);
 
 	appendPQExpBuffer(query, ";\n");
 
-	appendPQExpBuffer(delqry, "DROP POLICY %s ON %s;\n",
-					  rsinfo->rsecpolname, fmtId(tbinfo->dobj.name));
+	appendPQExpBuffer(delqry, "DROP POLICY %s", fmtId(polinfo->polname));
+	appendPQExpBuffer(delqry, " ON %s;\n", fmtId(tbinfo->dobj.name));
 
-	ArchiveEntry(fout, rsinfo->dobj.catId, rsinfo->dobj.dumpId,
-				 rsinfo->dobj.name,
-				 rsinfo->dobj.namespace->dobj.name,
+	ArchiveEntry(fout, polinfo->dobj.catId, polinfo->dobj.dumpId,
+				 polinfo->dobj.name,
+				 polinfo->dobj.namespace->dobj.name,
 				 NULL,
 				 tbinfo->rolname, false,
-				 "ROW SECURITY", SECTION_POST_DATA,
+				 "POLICY", SECTION_POST_DATA,
 				 query->data, delqry->data, NULL,
 				 NULL, 0,
 				 NULL, NULL);
@@ -6622,8 +6652,8 @@ getTableAttrs(Archive *fout, DumpOptions *dopt, TableInfo *tblinfo, int numTable
 		 */
 		if (g_verbose)
 			write_msg(NULL, "finding the columns and types of table \"%s\".\"%s\"\n",
-						  tbinfo->dobj.namespace->dobj.name,
-						  tbinfo->dobj.name);
+					  tbinfo->dobj.namespace->dobj.name,
+					  tbinfo->dobj.name);
 
 		resetPQExpBuffer(q);
 
@@ -6835,8 +6865,8 @@ getTableAttrs(Archive *fout, DumpOptions *dopt, TableInfo *tblinfo, int numTable
 
 			if (g_verbose)
 				write_msg(NULL, "finding default expressions of table \"%s\".\"%s\"\n",
-							  tbinfo->dobj.namespace->dobj.name,
-							  tbinfo->dobj.name);
+						  tbinfo->dobj.namespace->dobj.name,
+						  tbinfo->dobj.name);
 
 			resetPQExpBuffer(q);
 			if (fout->remoteVersion >= 70300)
@@ -8211,8 +8241,8 @@ dumpDumpableObject(Archive *fout, DumpOptions *dopt, DumpableObject *dobj)
 						 NULL, 0,
 						 dumpBlobs, NULL);
 			break;
-		case DO_ROW_SECURITY:
-			dumpRowSecurity(fout, dopt, (RowSecurityInfo *) dobj);
+		case DO_POLICY:
+			dumpPolicy(fout, dopt, (PolicyInfo *) dobj);
 			break;
 		case DO_PRE_DATA_BOUNDARY:
 		case DO_POST_DATA_BOUNDARY:
@@ -9241,6 +9271,23 @@ dumpDomain(Archive *fout, DumpOptions *dopt, TypeInfo *tyinfo)
 			tyinfo->dobj.namespace->dobj.name,
 			tyinfo->rolname, tyinfo->typacl);
 
+	/* Dump any per-constraint comments */
+	for (i = 0; i < tyinfo->nDomChecks; i++)
+	{
+		ConstraintInfo *domcheck = &(tyinfo->domChecks[i]);
+		PQExpBuffer	labelq = createPQExpBuffer();
+
+		appendPQExpBuffer(labelq, "CONSTRAINT %s ",
+						  fmtId(domcheck->dobj.name));
+		appendPQExpBuffer(labelq, "ON DOMAIN %s",
+						  fmtId(qtypname));
+		dumpComment(fout, dopt, labelq->data,
+					tyinfo->dobj.namespace->dobj.name,
+					tyinfo->rolname,
+					domcheck->dobj.catId, 0, tyinfo->dobj.dumpId);
+		destroyPQExpBuffer(labelq);
+	}
+
 	destroyPQExpBuffer(q);
 	destroyPQExpBuffer(delq);
 	destroyPQExpBuffer(labelq);
@@ -9269,7 +9316,6 @@ dumpCompositeType(Archive *fout, DumpOptions *dopt, TypeInfo *tyinfo)
 	int			i_attalign;
 	int			i_attisdropped;
 	int			i_attcollation;
-	int			i_typrelid;
 	int			i;
 	int			actual_atts;
 
@@ -9290,8 +9336,7 @@ dumpCompositeType(Archive *fout, DumpOptions *dopt, TypeInfo *tyinfo)
 			"pg_catalog.format_type(a.atttypid, a.atttypmod) AS atttypdefn, "
 						  "a.attlen, a.attalign, a.attisdropped, "
 						  "CASE WHEN a.attcollation <> at.typcollation "
-						  "THEN a.attcollation ELSE 0 END AS attcollation, "
-						  "ct.typrelid "
+						  "THEN a.attcollation ELSE 0 END AS attcollation "
 						  "FROM pg_catalog.pg_type ct "
 				"JOIN pg_catalog.pg_attribute a ON a.attrelid = ct.typrelid "
 					"LEFT JOIN pg_catalog.pg_type at ON at.oid = a.atttypid "
@@ -9309,8 +9354,7 @@ dumpCompositeType(Archive *fout, DumpOptions *dopt, TypeInfo *tyinfo)
 		appendPQExpBuffer(query, "SELECT a.attname, "
 			"pg_catalog.format_type(a.atttypid, a.atttypmod) AS atttypdefn, "
 						  "a.attlen, a.attalign, a.attisdropped, "
-						  "0 AS attcollation, "
-						  "ct.typrelid "
+						  "0 AS attcollation "
 					 "FROM pg_catalog.pg_type ct, pg_catalog.pg_attribute a "
 						  "WHERE ct.oid = '%u'::pg_catalog.oid "
 						  "AND a.attrelid = ct.typrelid "
@@ -9328,15 +9372,12 @@ dumpCompositeType(Archive *fout, DumpOptions *dopt, TypeInfo *tyinfo)
 	i_attalign = PQfnumber(res, "attalign");
 	i_attisdropped = PQfnumber(res, "attisdropped");
 	i_attcollation = PQfnumber(res, "attcollation");
-	i_typrelid = PQfnumber(res, "typrelid");
 
 	if (dopt->binary_upgrade)
 	{
-		Oid			typrelid = atooid(PQgetvalue(res, 0, i_typrelid));
-
 		binary_upgrade_set_type_oids_by_type_oid(fout, q,
 												 tyinfo->dobj.catId.oid);
-		binary_upgrade_set_pg_class_oids(fout, q, typrelid, false);
+		binary_upgrade_set_pg_class_oids(fout, q, tyinfo->typrelid, false);
 	}
 
 	qtypname = pg_strdup(fmtId(tyinfo->dobj.name));
@@ -13772,7 +13813,7 @@ dumpTableSchema(Archive *fout, DumpOptions *dopt, TableInfo *tbinfo)
 		 * Analogously, we set up typed tables using ALTER TABLE / OF here.
 		 */
 		if (dopt->binary_upgrade && (tbinfo->relkind == RELKIND_RELATION ||
-							   tbinfo->relkind == RELKIND_FOREIGN_TABLE))
+								   tbinfo->relkind == RELKIND_FOREIGN_TABLE))
 		{
 			for (j = 0; j < tbinfo->numatts; j++)
 			{
@@ -13874,7 +13915,7 @@ dumpTableSchema(Archive *fout, DumpOptions *dopt, TableInfo *tbinfo)
 				/* We preserve the toast oids, so we can use it during restore */
 				appendPQExpBufferStr(q, "\n-- For binary upgrade, set toast's relfrozenxid and relminmxid\n");
 				appendPQExpBuffer(q, "UPDATE pg_catalog.pg_class\n"
-								  "SET relfrozenxid = '%u', relminmxid = '%u'\n"
+							   "SET relfrozenxid = '%u', relminmxid = '%u'\n"
 								  "WHERE oid = '%u';\n",
 								  tbinfo->toast_frozenxid,
 								  tbinfo->toast_minmxid, tbinfo->toast_oid);
@@ -15066,7 +15107,7 @@ dumpEventTrigger(Archive *fout, DumpOptions *dopt, EventTriggerInfo *evtinfo)
 		}
 		appendPQExpBufferStr(query, ";\n");
 	}
-	appendPQExpBuffer(labelq, "EVENT TRIGGER %s ",
+	appendPQExpBuffer(labelq, "EVENT TRIGGER %s",
 					  fmtId(evtinfo->dobj.name));
 
 	ArchiveEntry(fout, evtinfo->dobj.catId, evtinfo->dobj.dumpId,
@@ -15075,7 +15116,7 @@ dumpEventTrigger(Archive *fout, DumpOptions *dopt, EventTriggerInfo *evtinfo)
 				 query->data, "", NULL, NULL, 0, NULL, NULL);
 
 	dumpComment(fout, dopt, labelq->data,
-				NULL, NULL,
+				NULL, evtinfo->evtowner,
 				evtinfo->dobj.catId, 0, evtinfo->dobj.dumpId);
 
 	destroyPQExpBuffer(query);
@@ -15616,7 +15657,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_TRIGGER:
 			case DO_EVENT_TRIGGER:
 			case DO_DEFAULT_ACL:
-			case DO_ROW_SECURITY:
+			case DO_POLICY:
 				/* Post-data objects: must come after the post-data boundary */
 				addObjectDependency(dobj, postDataBound->dumpId);
 				break;

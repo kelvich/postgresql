@@ -4,7 +4,7 @@
  *
  *	Parallel support for the pg_dump archiver
  *
- * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *	The author is not responsible for loss or damages that may
@@ -821,7 +821,7 @@ lockTableNoWait(ArchiveHandle *AH, TocEntry *te)
 					  "       pg_class.relname "
 					  "  FROM pg_class "
 					"  JOIN pg_namespace on pg_namespace.oid = relnamespace "
-					  " WHERE pg_class.oid = %d", te->catalogId.oid);
+					  " WHERE pg_class.oid = %u", te->catalogId.oid);
 
 	res = PQexec(AH->connection, query->data);
 
@@ -1160,7 +1160,7 @@ select_loop(int maxFd, fd_set *workerset)
 		i = select(maxFd + 1, workerset, NULL, NULL, NULL);
 
 		/*
-		 * If we Ctrl-C the master process , it's likely that we interrupt
+		 * If we Ctrl-C the master process, it's likely that we interrupt
 		 * select() here. The signal handler will set wantAbort == true and
 		 * the shutdown journey starts from here. Note that we'll come back
 		 * here later when we tell all workers to terminate and read their
@@ -1308,7 +1308,7 @@ readMessageFromPipe(int fd)
 		{
 			/* could be any number */
 			bufsize += 16;
-			msg = (char *) realloc(msg, bufsize);
+			msg = (char *) pg_realloc(msg, bufsize);
 		}
 	}
 
@@ -1316,7 +1316,7 @@ readMessageFromPipe(int fd)
 	 * Worker has closed the connection, make sure to clean up before return
 	 * since we are not returning msg (but did allocate it).
 	 */
-	free(msg);
+	pg_free(msg);
 
 	return NULL;
 }
@@ -1331,7 +1331,8 @@ readMessageFromPipe(int fd)
 static int
 pgpipe(int handles[2])
 {
-	pgsocket		s, tmp_sock;
+	pgsocket	s,
+				tmp_sock;
 	struct sockaddr_in serv_addr;
 	int			len = sizeof(serv_addr);
 

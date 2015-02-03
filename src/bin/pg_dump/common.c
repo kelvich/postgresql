@@ -4,7 +4,7 @@
  *	Catalog routines used by pg_dump; long ago these were shared
  *	by another dump tool, but not anymore.
  *
- * Portions Copyright (c) 1996-2014, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1996-2015, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
  *
@@ -248,8 +248,8 @@ getSchemaData(Archive *fout, DumpOptions *dopt, int *numTablesPtr)
 	getRules(fout, &numRules);
 
 	if (g_verbose)
-		write_msg(NULL, "reading row-security policies\n");
-	getRowSecurity(fout, tblinfo, numTables);
+		write_msg(NULL, "reading policies\n");
+	getPolicies(fout, tblinfo, numTables);
 
 	*numTablesPtr = numTables;
 	return tblinfo;
