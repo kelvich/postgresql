@@ -1394,16 +1394,17 @@ g_cube_distance(PG_FUNCTION_ARGS)
 		NDBOX *query = PG_GETARG_NDBOX(1);
 		switch(strategy)
 		{
-		case 16:
-			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab,
-				PointerGetDatum(cube), PointerGetDatum(query)));
-			break;
 		case 17:
 			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid,
 				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		case 18:
 			retval = DatumGetFloat8(DirectFunctionCall2(distance_chebyshev,
+				PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		case 16:
+		default:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab,
 				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		}
