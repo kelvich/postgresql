@@ -1372,22 +1372,26 @@ g_cube_distance(PG_FUNCTION_ARGS)
 			if IS_POINT(cube)
 				retval = (cube)->x[(coord-1)%DIM(cube)];
 			else
+			{
 				/* This is for right traversal of non-leaf elements */
 				retval = Min(
 					(cube)->x[(coord-1)%DIM(cube)],
 					(cube)->x[(coord-1)%DIM(cube) + DIM(cube)]
 				);
+			}
 
 		/* negative coordinate user for descending sort */
 		else
 			if IS_POINT(cube)
 				retval = -(cube)->x[(-coord-1)%DIM(cube)];
 			else
+			{
 				/* This is for right traversal of non-leaf elements */
 				retval = Min(
 					-(cube)->x[(-coord-1)%DIM(cube)],
 					-(cube)->x[(-coord-1)%DIM(cube) + DIM(cube)]
 				);
+			}
 	}
 	else
 	{
@@ -1521,22 +1525,26 @@ cube_coord(PG_FUNCTION_ARGS)
 	NDBOX	   *cube = PG_GETARG_NDBOX(0);
 	int			coord = PG_GETARG_INT16(1);
 
-	if ((0 < coord) && (coord <= 2*DIM(cube)))
+	if ((coord > 0) && (coord <= 2*DIM(cube)))
+	{
 		if IS_POINT(cube)
-			PG_RETURN_FLOAT8( (cube)->x[(-1+coord)%DIM(cube)] );
+			PG_RETURN_FLOAT8( (cube)->x[(coord-1)%DIM(cube)] );
 		else
-			PG_RETURN_FLOAT8( (cube)->x[-1+coord] );
-
-	else if ((-2*DIM(cube) <= coord) && (coord < 0))
+			PG_RETURN_FLOAT8( (cube)->x[coord-1] );
+	}
+	else if (coord >= (-2*DIM(cube)) && (coord < 0))
+	{
 		if IS_POINT(cube)
-			PG_RETURN_FLOAT8( -(cube)->x[(-1-coord)%DIM(cube)] );
+			PG_RETURN_FLOAT8( -(cube)->x[(-coord-1)%DIM(cube)] );
 		else
-			PG_RETURN_FLOAT8( -(cube)->x[-1-coord] );
-
+			PG_RETURN_FLOAT8( -(cube)->x[-coord-1] );
+	}
 	else
+	{
 		ereport(ERROR,
 					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
 					 errmsg("Index out of bounds")));
+	}
 }
 
 /* Increase or decrease box size by a radius in at least n dimensions. */
