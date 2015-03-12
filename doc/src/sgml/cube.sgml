@@ -186,7 +186,7 @@ LIMIT 1;
 
 
   <para>
-   Also kNN framework allows us to cheat with metrics in order to get results sorted by selected coodinate directly from the index without extra sorting step. That technique signifintly faster on small values of LIMIT, however with bigger values of LIMIT planner will switch automatically to standart index scan and sort.
+   Also kNN framework allows us to cheat with metrics in order to get results sorted by selected coodinate directly from the index without extra sorting step. That technique significantly faster on small values of LIMIT, however with bigger values of LIMIT planner will switch automatically to standart index scan and sort.
    That behavior can be achieved using special coordinate operator (cube c)-&gt;(int offset), that returns cube coordinate when offset is positive and -1*coordinate when offset is negative.
   </para>
 <programlisting>
@@ -207,7 +207,7 @@ LIMIT 1;
    So using that operator as kNN metric we can obtain cubes sorted by it's coordinate.
   </para>
   <para>
-   To get cubes ordered by first coordinate ascending one can use following query:
+   To get cubes ordered by first coordinate ascending one can use the following query:
   </para>
 <programlisting>
 SELECT c FROM test ORDER BY c->1 LIMIT 5;
