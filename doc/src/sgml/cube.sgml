@@ -74,7 +74,7 @@
    It does not matter which order the opposite corners of a cube are
    entered in.  The <type>cube</> functions
    automatically swap values if needed to create a uniform
-   <quote>lower left &mdash; upper right</> internal representation. When corners are coincide cube stores only one corner along with special flag in order to reduce size wasted.
+   <quote>lower left &mdash; upper right</> internal representation. When corners coincide cube stores only one corner along with a special flag in order to reduce size wasted.
   </para>
 
   <para>
@@ -176,7 +176,7 @@
   </table>
 
   <para>
-   Selection of nearing neigbours can be done in following way:
+   Selection of nearing neigbours can be done in the following way:
   </para>
 <programlisting>
 SELECT c FROM test 
