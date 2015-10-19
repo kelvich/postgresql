@@ -40,6 +40,7 @@ PG_FUNCTION_INFO_V1(cube_c_f8_f8);
 PG_FUNCTION_INFO_V1(cube_dim);
 PG_FUNCTION_INFO_V1(cube_ll_coord);
 PG_FUNCTION_INFO_V1(cube_ur_coord);
+PG_FUNCTION_INFO_V1(cube_coord);
 PG_FUNCTION_INFO_V1(cube_subset);
 
 /*
@@ -53,6 +54,8 @@ PG_FUNCTION_INFO_V1(g_cube_penalty);
 PG_FUNCTION_INFO_V1(g_cube_picksplit);
 PG_FUNCTION_INFO_V1(g_cube_union);
 PG_FUNCTION_INFO_V1(g_cube_same);
+PG_FUNCTION_INFO_V1(g_cube_distance);
+
 
 /*
 ** B-tree support functions
@@ -79,7 +82,9 @@ PG_FUNCTION_INFO_V1(cube_size);
 /*
 ** miscellaneous
 */
-PG_FUNCTION_INFO_V1(cube_distance);
+PG_FUNCTION_INFO_V1(distance_taxicab);
+PG_FUNCTION_INFO_V1(distance_euclid);
+PG_FUNCTION_INFO_V1(distance_chebyshev);
 PG_FUNCTION_INFO_V1(cube_is_point);
 PG_FUNCTION_INFO_V1(cube_enlarge);
 
@@ -1202,14 +1207,13 @@ cube_overlap(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
-
 /* Distance */
 /* The distance is computed as a per axis sum of the squared distances
    between 1D projections of the boxes onto Cartesian axes. Assuming zero
    distance between overlapping projections, this metric coincides with the
    "common sense" geometric distance */
 Datum
-cube_distance(PG_FUNCTION_ARGS)
+distance_euclid(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *a = PG_GETARG_NDBOX(0),
 			   *b = PG_GETARG_NDBOX(1);
@@ -1255,6 +1259,156 @@ cube_distance(PG_FUNCTION_ARGS)
 	}
 
 	PG_RETURN_FLOAT8(sqrt(distance));
+}
+
+Datum
+distance_taxicab(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		distance;
+	int			i;
+
+	/* swap the box pointers if needed */
+	if (DIM(a) < DIM(b))
+	{
+		NDBOX	   *tmp = b;
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < DIM(b); i++)
+		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = DIM(b); i < DIM(a); i++)
+		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+Datum
+distance_chebyshev(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *a = PG_GETARG_NDBOX(0),
+			   *b = PG_GETARG_NDBOX(1);
+	bool		swapped = false;
+	double		d, distance;
+	int			i;
+
+	/* swap the box pointers if needed */
+	if (DIM(a) < DIM(b))
+	{
+		NDBOX	   *tmp = b;
+		b = a;
+		a = tmp;
+		swapped = true;
+	}
+
+	distance = 0.0;
+	/* compute within the dimensions of (b) */
+	for (i = 0; i < DIM(b); i++)
+	{
+		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
+		if (d > distance)
+			distance = d;
+	}
+
+	/* compute distance to zero for those dimensions in (a) absent in (b) */
+	for (i = DIM(b); i < DIM(a); i++)
+	{
+		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
+		if (d > distance)
+			distance = d;
+	}
+
+	if (swapped)
+	{
+		PG_FREE_IF_COPY(b, 0);
+		PG_FREE_IF_COPY(a, 1);
+	}
+	else
+	{
+		PG_FREE_IF_COPY(a, 0);
+		PG_FREE_IF_COPY(b, 1);
+	}
+
+	PG_RETURN_FLOAT8(distance);
+}
+
+Datum
+g_cube_distance(PG_FUNCTION_ARGS)
+{
+	GISTENTRY  *entry = (GISTENTRY *) PG_GETARG_POINTER(0);
+	StrategyNumber strategy = (StrategyNumber) PG_GETARG_UINT16(2);
+	NDBOX      *cube = DatumGetNDBOX(entry->key);
+	double      retval;
+
+	if (strategy == 15)
+	{
+		int coord = PG_GETARG_INT32(1);
+
+		if(coord > 0)
+			if IS_POINT(cube)
+				retval = (cube)->x[(coord-1)%DIM(cube)];
+			else
+			{
+				/* This is for right traversal of non-leaf elements */
+				retval = Min(
+					(cube)->x[(coord-1)%DIM(cube)],
+					(cube)->x[(coord-1)%DIM(cube) + DIM(cube)]
+				);
+			}
+
+		/* negative coordinate user for descending sort */
+		else
+			if IS_POINT(cube)
+				retval = -(cube)->x[(-coord-1)%DIM(cube)];
+			else
+			{
+				/* This is for right traversal of non-leaf elements */
+				retval = Min(
+					-(cube)->x[(-coord-1)%DIM(cube)],
+					-(cube)->x[(-coord-1)%DIM(cube) + DIM(cube)]
+				);
+			}
+	}
+	else
+	{
+		NDBOX *query = PG_GETARG_NDBOX(1);
+		switch(strategy)
+		{
+		case 17:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid,
+				PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		case 18:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_chebyshev,
+				PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		case 16:
+		default:
+			retval = DatumGetFloat8(DirectFunctionCall2(distance_taxicab,
+				PointerGetDatum(cube), PointerGetDatum(query)));
+			break;
+		}
+	}
+	PG_RETURN_FLOAT8(retval);
 }
 
 static double
@@ -1350,6 +1504,42 @@ cube_ur_coord(PG_FUNCTION_ARGS)
 
 	PG_FREE_IF_COPY(c, 0);
 	PG_RETURN_FLOAT8(result);
+}
+
+/*
+ * Function returns cube coordinate.
+ * Numbers from 1 to DIM denotes Lower Left corner coordinates.
+ * Numbers from DIM+1 to 2*DIM denotes Upper Right cube corner coordinates.
+ * If negative number passed to function it is treated as it's absolut value,
+ * but resulting coordinate will be returned with changed sign. This
+ * convention useful for descending sort by this coordinate.
+ */
+Datum
+cube_coord(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *cube = PG_GETARG_NDBOX(0);
+	int			coord = PG_GETARG_INT16(1);
+
+	if ((coord > 0) && (coord <= 2*DIM(cube)))
+	{
+		if IS_POINT(cube)
+			PG_RETURN_FLOAT8( (cube)->x[(coord-1)%DIM(cube)] );
+		else
+			PG_RETURN_FLOAT8( (cube)->x[coord-1] );
+	}
+	else if (coord >= (-2*DIM(cube)) && (coord < 0))
+	{
+		if IS_POINT(cube)
+			PG_RETURN_FLOAT8( -(cube)->x[(-coord-1)%DIM(cube)] );
+		else
+			PG_RETURN_FLOAT8( -(cube)->x[-coord-1] );
+	}
+	else
+	{
+		ereport(ERROR,
+					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
+					 errmsg("Index out of bounds")));
+	}
 }
 
 /* Increase or decrease box size by a radius in at least n dimensions. */
