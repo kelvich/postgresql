@@ -83,7 +83,7 @@ PG_FUNCTION_INFO_V1(cube_size);
 ** miscellaneous
 */
 PG_FUNCTION_INFO_V1(distance_taxicab);
-PG_FUNCTION_INFO_V1(distance_euclid);
+PG_FUNCTION_INFO_V1(cube_distance);
 PG_FUNCTION_INFO_V1(distance_chebyshev);
 PG_FUNCTION_INFO_V1(cube_is_point);
 PG_FUNCTION_INFO_V1(cube_enlarge);
@@ -1213,7 +1213,7 @@ cube_overlap(PG_FUNCTION_ARGS)
    distance between overlapping projections, this metric coincides with the
    "common sense" geometric distance */
 Datum
-distance_euclid(PG_FUNCTION_ARGS)
+cube_distance(PG_FUNCTION_ARGS)
 {
 	NDBOX	   *a = PG_GETARG_NDBOX(0),
 			   *b = PG_GETARG_NDBOX(1);
@@ -1282,11 +1282,11 @@ distance_taxicab(PG_FUNCTION_ARGS)
 	distance = 0.0;
 	/* compute within the dimensions of (b) */
 	for (i = 0; i < DIM(b); i++)
-		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
+		distance += fabs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
 
 	/* compute distance to zero for those dimensions in (a) absent in (b) */
 	for (i = DIM(b); i < DIM(a); i++)
-		distance += abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
+		distance += fabs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
 
 	if (swapped)
 	{
@@ -1324,7 +1324,7 @@ distance_chebyshev(PG_FUNCTION_ARGS)
 	/* compute within the dimensions of (b) */
 	for (i = 0; i < DIM(b); i++)
 	{
-		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
+		d = fabs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), LL_COORD(b,i), UR_COORD(b,i)));
 		if (d > distance)
 			distance = d;
 	}
@@ -1332,7 +1332,7 @@ distance_chebyshev(PG_FUNCTION_ARGS)
 	/* compute distance to zero for those dimensions in (a) absent in (b) */
 	for (i = DIM(b); i < DIM(a); i++)
 	{
-		d = abs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
+		d = fabs(distance_1D(LL_COORD(a,i), UR_COORD(a,i), 0.0, 0.0));
 		if (d > distance)
 			distance = d;
 	}
@@ -1394,7 +1394,7 @@ g_cube_distance(PG_FUNCTION_ARGS)
 		switch(strategy)
 		{
 		case 17:
-			retval = DatumGetFloat8(DirectFunctionCall2(distance_euclid,
+			retval = DatumGetFloat8(DirectFunctionCall2(cube_distance,
 				PointerGetDatum(cube), PointerGetDatum(query)));
 			break;
 		case 18:

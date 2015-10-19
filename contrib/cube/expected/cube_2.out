@@ -1383,10 +1383,10 @@ SELECT cube_size('(42,137)'::cube);
 
 -- Test of distances
 -- 
-SELECT distance_euclid('(1,1)'::cube, '(4,5)'::cube);
- distance_euclid 
------------------
-               5
+SELECT cube_distance('(1,1)'::cube, '(4,5)'::cube);
+ cube_distance 
+---------------
+             5
 (1 row)
 
 SELECT '(1,1)'::cube <-> '(4,5)'::cube as d_e;
@@ -1420,10 +1420,10 @@ SELECT '(1,1)'::cube <#> '(4,5)'::cube as d_t;
 (1 row)
 
 -- zero for overlapping
-SELECT distance_euclid('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
- distance_euclid 
------------------
-               0
+SELECT cube_distance('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
+ cube_distance 
+---------------
+             0
 (1 row)
 
 SELECT distance_chebyshev('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);

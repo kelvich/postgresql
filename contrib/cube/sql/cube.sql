@@ -327,14 +327,14 @@ SELECT cube_size('(42,137)'::cube);
 
 -- Test of distances
 -- 
-SELECT distance_euclid('(1,1)'::cube, '(4,5)'::cube);
+SELECT cube_distance('(1,1)'::cube, '(4,5)'::cube);
 SELECT '(1,1)'::cube <-> '(4,5)'::cube as d_e;
 SELECT distance_chebyshev('(1,1)'::cube, '(4,5)'::cube);
 SELECT '(1,1)'::cube <=> '(4,5)'::cube as d_c;
 SELECT distance_taxicab('(1,1)'::cube, '(4,5)'::cube);
 SELECT '(1,1)'::cube <#> '(4,5)'::cube as d_t;
 -- zero for overlapping
-SELECT distance_euclid('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
+SELECT cube_distance('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
 SELECT distance_chebyshev('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
 SELECT distance_taxicab('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
 -- coordinate access
