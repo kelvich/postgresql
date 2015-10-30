@@ -172,6 +172,11 @@ RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
+CREATE FUNCTION cube_coord_llur(cube, int4)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
 CREATE FUNCTION cube(float8) RETURNS cube
 AS 'MODULE_PATHNAME', 'cube_f8'
 LANGUAGE C IMMUTABLE STRICT;
@@ -265,6 +270,10 @@ CREATE OPERATOR -> (
 	LEFTARG = cube, RIGHTARG = int, PROCEDURE = cube_coord
 );
 
+CREATE OPERATOR ~> (
+	LEFTARG = cube, RIGHTARG = int, PROCEDURE = cube_coord_llur
+);
+
 CREATE OPERATOR <#> (
 	LEFTARG = cube, RIGHTARG = cube, PROCEDURE = distance_taxicab,
 	COMMUTATOR = '<#>'
@@ -354,7 +363,7 @@ CREATE OPERATOR CLASS gist_cube_ops
 	OPERATOR	8	<@ ,
 	OPERATOR	13	@ ,
 	OPERATOR	14	~ ,
-	OPERATOR	15	-> (cube, int) FOR ORDER BY float_ops,
+	OPERATOR	15	~> (cube, int) FOR ORDER BY float_ops,
 	OPERATOR	16	<#> (cube, cube) FOR ORDER BY float_ops,
 	OPERATOR	17	<-> (cube, cube) FOR ORDER BY float_ops,
 	OPERATOR	18	<=> (cube, cube) FOR ORDER BY float_ops,

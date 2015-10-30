@@ -339,6 +339,7 @@ SELECT distance_chebyshev('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
 SELECT distance_taxicab('(2,2),(10,10)'::cube, '(0,0),(5,5)'::cube);
 -- coordinate access
 SELECT cube(array[10,20,30], array[40,50,60])->1;
+SELECT cube(array[40,50,60], array[10,20,30])->1;
 SELECT cube(array[10,20,30], array[40,50,60])->6;
 SELECT cube(array[10,20,30], array[40,50,60])->0;
 SELECT cube(array[10,20,30], array[40,50,60])->7;
@@ -347,6 +348,17 @@ SELECT cube(array[10,20,30], array[40,50,60])->-6;
 SELECT cube(array[10,20,30])->3;
 SELECT cube(array[10,20,30])->6;
 SELECT cube(array[10,20,30])->-6;
+-- "normalized" coordinate access
+SELECT cube(array[10,20,30], array[40,50,60])~>1;
+SELECT cube(array[40,50,60], array[10,20,30])~>1;
+SELECT cube(array[10,20,30], array[40,50,60])~>2;
+SELECT cube(array[40,50,60], array[10,20,30])~>2;
+SELECT cube(array[10,20,30], array[40,50,60])~>3;
+SELECT cube(array[40,50,60], array[10,20,30])~>3;
+
+SELECT cube(array[40,50,60], array[10,20,30])~>0;
+SELECT cube(array[40,50,60], array[10,20,30])~>4;
+SELECT cube(array[40,50,60], array[10,20,30])~>(-1);
 
 -- Load some example data and build the index
 --
@@ -366,17 +378,15 @@ SELECT *, c <=> '(100, 100),(500, 500)'::cube as dist FROM test_cube ORDER BY c 
 SELECT *, c <#> '(100, 100),(500, 500)'::cube as dist FROM test_cube ORDER BY c <#> '(100, 100),(500, 500)'::cube LIMIT 5;
 
 -- kNN-based sorting
-SELECT * FROM test_cube ORDER BY c->1 LIMIT 15; -- ascending by 1st coordinate
-SELECT * FROM test_cube ORDER BY c->4 LIMIT 15; -- ascending by 4th coordinate
-SELECT * FROM test_cube ORDER BY c->-1 LIMIT 15; -- descending by 1st coordinate
-SELECT * FROM test_cube ORDER BY c->-4 LIMIT 15; -- descending by 4th coordinate
+SELECT * FROM test_cube ORDER BY c~>1 LIMIT 15; -- ascending by 1st coordinate of lower left corner
+SELECT * FROM test_cube ORDER BY c~>4 LIMIT 15; -- ascending by 2nd coordinate or upper right corner
+SELECT * FROM test_cube ORDER BY c~>1 DESC LIMIT 15; -- descending by 1st coordinate of lower left corner
+SELECT * FROM test_cube ORDER BY c~>4 DESC LIMIT 15; -- descending by 2nd coordinate or upper right corner
 
 -- same thing for index with points
 CREATE TABLE test_point(c cube);
 INSERT INTO test_point(SELECT cube(array[c->1,c->2,c->3,c->4]) FROM test_cube);
 CREATE INDEX ON test_point USING gist(c);
-SELECT * FROM test_point ORDER BY c->1 LIMIT 15; -- ascending by 1st coordinate
-SELECT * FROM test_point ORDER BY c->5 LIMIT 15; -- should be the same as previous
-SELECT * FROM test_point ORDER BY c->-1 LIMIT 15; -- descending by 1st coordinate
-SELECT * FROM test_point ORDER BY c->-5 LIMIT 15; -- should be the same as previous
+SELECT * FROM test_point ORDER BY c~>1, c~>2 LIMIT 15; -- ascending by 1st then by 2nd coordinate
+SELECT * FROM test_point ORDER BY c~>4 DESC LIMIT 15; -- descending by 1st coordinate
 

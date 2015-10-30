@@ -41,6 +41,7 @@ PG_FUNCTION_INFO_V1(cube_dim);
 PG_FUNCTION_INFO_V1(cube_ll_coord);
 PG_FUNCTION_INFO_V1(cube_ur_coord);
 PG_FUNCTION_INFO_V1(cube_coord);
+PG_FUNCTION_INFO_V1(cube_coord_llur);
 PG_FUNCTION_INFO_V1(cube_subset);
 
 /*
@@ -1363,30 +1364,17 @@ g_cube_distance(PG_FUNCTION_ARGS)
 	{
 		int coord = PG_GETARG_INT32(1);
 
-		if(coord > 0)
-			if IS_POINT(cube)
-				retval = (cube)->x[(coord-1)%DIM(cube)];
-			else
-			{
-				/* This is for right traversal of non-leaf elements */
-				retval = Min(
-					(cube)->x[(coord-1)%DIM(cube)],
-					(cube)->x[(coord-1)%DIM(cube) + DIM(cube)]
-				);
-			}
-
-		/* negative coordinate user for descending sort */
+		if IS_POINT(cube)
+		{
+			retval = (cube)->x[(coord-1)%DIM(cube)];
+		}
 		else
-			if IS_POINT(cube)
-				retval = -(cube)->x[(-coord-1)%DIM(cube)];
-			else
-			{
-				/* This is for right traversal of non-leaf elements */
-				retval = Min(
-					-(cube)->x[(-coord-1)%DIM(cube)],
-					-(cube)->x[(-coord-1)%DIM(cube) + DIM(cube)]
-				);
-			}
+		{
+			retval = Min(
+				(cube)->x[(coord-1)%DIM(cube)],
+				(cube)->x[(coord-1)%DIM(cube) + DIM(cube)]
+			);
+		}
 	}
 	else
 	{
@@ -1508,11 +1496,8 @@ cube_ur_coord(PG_FUNCTION_ARGS)
 
 /*
  * Function returns cube coordinate.
- * Numbers from 1 to DIM denotes Lower Left corner coordinates.
- * Numbers from DIM+1 to 2*DIM denotes Upper Right cube corner coordinates.
- * If negative number passed to function it is treated as it's absolut value,
- * but resulting coordinate will be returned with changed sign. This
- * convention useful for descending sort by this coordinate.
+ * Numbers from 1 to DIM denotes first corner coordinates.
+ * Numbers from DIM+1 to 2*DIM denotes second corner coordinates.
  */
 Datum
 cube_coord(PG_FUNCTION_ARGS)
@@ -1527,18 +1512,50 @@ cube_coord(PG_FUNCTION_ARGS)
 		else
 			PG_RETURN_FLOAT8( (cube)->x[coord-1] );
 	}
-	else if (coord >= (-2*DIM(cube)) && (coord < 0))
+	else
+	{
+		ereport(ERROR,
+					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
+					 errmsg("Cube index out of bounds")));
+	}
+}
+
+
+/*
+ * This function works like cube_coord(),
+ * but rearranges coordinates of corners to get cube representation 
+ * in the form of (lower left, upper right).
+ * For historical reasons that extension allows us to create cubes in form
+ * ((2,1),(1,2)) and instead of normalizing such cube to ((1,1),(2,2)) it
+ * stores cube in original way. But to get cubes ordered by one of dimensions
+ * directly from the index without extra sort step we need some
+ * representation-independent coordinate getter. This function implements it.
+ */
+Datum
+cube_coord_llur(PG_FUNCTION_ARGS)
+{
+	NDBOX	   *cube = PG_GETARG_NDBOX(0);
+	int			coord = PG_GETARG_INT16(1);
+
+	if ((coord > 0) && (coord <= DIM(cube)))
 	{
 		if IS_POINT(cube)
-			PG_RETURN_FLOAT8( -(cube)->x[(-coord-1)%DIM(cube)] );
+			PG_RETURN_FLOAT8( (cube)->x[coord-1] );
 		else
-			PG_RETURN_FLOAT8( -(cube)->x[-coord-1] );
+			PG_RETURN_FLOAT8( Min((cube)->x[coord-1], (cube)->x[coord-1+DIM(cube)]) );
+	}
+	else if ((coord > DIM(cube)) && (coord <= 2*DIM(cube)))
+	{
+		if IS_POINT(cube)
+			PG_RETURN_FLOAT8( (cube)->x[(coord-1)%DIM(cube)] );
+		else
+			PG_RETURN_FLOAT8( Max((cube)->x[coord-1], (cube)->x[coord-1-DIM(cube)]) );
 	}
 	else
 	{
 		ereport(ERROR,
 					(errcode(ERRCODE_ARRAY_ELEMENT_ERROR),
-					 errmsg("Index out of bounds")));
+					 errmsg("Cube index out of bounds")));
 	}
 }
 
