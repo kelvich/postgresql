@@ -1,4 +1,4 @@
-/* contrib/pageinspect/pageinspect--1.2--1.3.sql */
+/* contrib/cube/cube--1.0--1.1.sql */
 
 -- complain if script is sourced in psql, rather than via ALTER EXTENSION
 \echo Use "ALTER EXTENSION cube UPDATE TO '1.1'" to load this file. \quit
@@ -18,8 +18,17 @@ RETURNS float8
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
+CREATE FUNCTION cube_coord_llur(cube, int4)
+RETURNS float8
+AS 'MODULE_PATHNAME'
+LANGUAGE C IMMUTABLE STRICT;
+
 CREATE OPERATOR -> (
 	LEFTARG = cube, RIGHTARG = int, PROCEDURE = cube_coord
+);
+
+CREATE OPERATOR ~> (
+	LEFTARG = cube, RIGHTARG = int, PROCEDURE = cube_coord_llur
 );
 
 CREATE OPERATOR <#> (
@@ -42,15 +51,10 @@ RETURNS internal
 AS 'MODULE_PATHNAME'
 LANGUAGE C IMMUTABLE STRICT;
 
-
-
 ALTER OPERATOR FAMILY gist_cube_ops USING gist ADD
-	OPERATOR	15	-> (cube, int) FOR ORDER BY float_ops,
+	OPERATOR	15	~> (cube, int) FOR ORDER BY float_ops,
 	OPERATOR	16	<#> (cube, cube) FOR ORDER BY float_ops,
 	OPERATOR	17	<-> (cube, cube) FOR ORDER BY float_ops,
 	OPERATOR	18	<=> (cube, cube) FOR ORDER BY float_ops,
 	FUNCTION	8	(cube, cube)	g_cube_distance (internal, cube, smallint, oid);
-
-
-
 
