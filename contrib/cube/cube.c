@@ -57,7 +57,6 @@ PG_FUNCTION_INFO_V1(g_cube_union);
 PG_FUNCTION_INFO_V1(g_cube_same);
 PG_FUNCTION_INFO_V1(g_cube_distance);
 
-
 /*
 ** B-tree support functions
 */
@@ -1208,6 +1207,7 @@ cube_overlap(PG_FUNCTION_ARGS)
 	PG_RETURN_BOOL(res);
 }
 
+
 /* Distance */
 /* The distance is computed as a per axis sum of the squared distances
    between 1D projections of the boxes onto Cartesian axes. Assuming zero
@@ -1523,7 +1523,7 @@ cube_coord(PG_FUNCTION_ARGS)
 
 /*
  * This function works like cube_coord(),
- * but rearranges coordinates of corners to get cube representation 
+ * but rearranges coordinates of corners to get cube representation
  * in the form of (lower left, upper right).
  * For historical reasons that extension allows us to create cubes in form
  * ((2,1),(1,2)) and instead of normalizing such cube to ((1,1),(2,2)) it

@@ -326,7 +326,7 @@ SELECT cube_size('(4,8),(15,16)'::cube);
 SELECT cube_size('(42,137)'::cube);
 
 -- Test of distances
--- 
+--
 SELECT cube_distance('(1,1)'::cube, '(4,5)'::cube);
 SELECT '(1,1)'::cube <-> '(4,5)'::cube as d_e;
 SELECT distance_chebyshev('(1,1)'::cube, '(4,5)'::cube);
@@ -389,4 +389,3 @@ INSERT INTO test_point(SELECT cube(array[c->1,c->2,c->3,c->4]) FROM test_cube);
 CREATE INDEX ON test_point USING gist(c);
 SELECT * FROM test_point ORDER BY c~>1, c~>2 LIMIT 15; -- ascending by 1st then by 2nd coordinate
 SELECT * FROM test_point ORDER BY c~>4 DESC LIMIT 15; -- descending by 1st coordinate
-
