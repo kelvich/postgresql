@@ -1411,15 +1411,21 @@ FinishPreparedTransaction(const char *gid, bool isCommit)
 	 * callbacks will release the locks the transaction held.
 	 */
 	if (isCommit)
+	{
 		RecordTransactionCommitPrepared(xid,
 										hdr->nsubxacts, children,
 										hdr->ncommitrels, commitrels,
 										hdr->ninvalmsgs, invalmsgs,
 										hdr->initfileinval);
+		CallXactCallbacks(XACT_EVENT_COMMIT_PREPARED);
+	}
 	else
+	{
 		RecordTransactionAbortPrepared(xid,
 									   hdr->nsubxacts, children,
 									   hdr->nabortrels, abortrels);
+		CallXactCallbacks(XACT_EVENT_ABORT_PREPARED);
+	}
 
 	ProcArrayRemove(proc, latestXid);
 
@@ -2210,4 +2216,13 @@ RecordTransactionAbortPrepared(TransactionId xid,
 	 * in the procarray and continue to hold locks.
 	 */
 	SyncRepWaitForLSN(recptr);
+}
+
+/*
+ * Return identified of current global transaction
+ */
+const char*
+GetLockedGlobalTransactionId(void)
+{
+	return MyLockedGxact ? MyLockedGxact->gid : NULL;
 }
